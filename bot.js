@@ -307,53 +307,84 @@ function maxScentStrength(scent) {
   return max;
 }
 
-function buildLogFields(obs, role, mode, prevMode, bounce, target, dist) {
-  const isMouse = role === 'mouse';
-  return {
-    turn: obs.turn,
-    role,
-    mode,
-    prevMode,
-    bounce,
-    x: obs.you.x,
-    y: obs.you.y,
-    target: target || null,
-    dist: dist === undefined ? null : dist,
-    carrying: isMouse ? obs.you.carrying : null,
-    heavy: isMouse ? obs.you.heavy : null,
-    inHole: isMouse ? obs.you.inHole : null,
-    cheeseCount: obs.cheese.length,
-    visibleCount: obs.visible.length,
-    eventTypes: obs.events.map((e) => e.type),
-    // Desde aquí, variables de observación agregadas solo para análisis
-    // (sección 8 del diseño: cascabel, memoria del gato sobre el ratón,
-    // etc.). No las lee decideMouse ni decideCat, así que no cambian el
-    // comportamiento del bot. Mismas llaves en todas las líneas: lo que no
-    // aplica al rol de este turno queda en null.
-    bell: isMouse ? (obs.bell === undefined ? null : obs.bell) : null,
-    bellLoud: isMouse ? (obs.bellLoud === undefined ? null : obs.bellLoud) : null,
-    cat: isMouse
-      ? (obs.cat ? { x: obs.cat.x, y: obs.cat.y, facing: obs.cat.facing, stamina: obs.cat.stamina } : null)
-      : null,
-    stamina: isMouse ? null : obs.you.stamina,
-    facing: isMouse ? null : obs.you.facing,
-    scentCount: isMouse ? null : obs.scent.length,
-    scentMax: isMouse ? null : maxScentStrength(obs.scent),
-    mouse: isMouse ? null : (obs.mouse ? { x: obs.mouse.x, y: obs.mouse.y, carrying: obs.mouse.carrying } : null),
-  };
+/** Rol codificado a un carácter, como pide LOGS.md: 'm' ratón, 'c' gato. */
+function roleCode(role) {
+  return role === 'mouse' ? 'm' : 'c';
 }
 
-/** Línea única del turno 1 con las entrances, para ubicar capturas ahí (DISENO_V1.md §6). */
+/** Convención de LOGS.md: los booleanos se registran como 1/0, no true/false. */
+function toBit(value) {
+  return value ? 1 : 0;
+}
+
+/**
+ * Formato de registro v2 (ver LOGS.md para el detalle completo de cada
+ * clave). El motor corta cada console.log a unos 300 caracteres; con las
+ * claves largas de v1 llegábamos a ~390 y el motor nos cortaba justo los
+ * últimos campos (scentMax, mouse). Por eso v2 usa claves cortas y cada rol
+ * imprime SOLO sus propias claves (menos campos por línea, no solo nombres
+ * más cortos). Nada de esto se usa para decidir (DISENO_V1.md §2): esta
+ * función solo arma el objeto que después se imprime con console.log.
+ *
+ * Leyenda resumida:
+ *   comunes  → t=turno  r=rol(m/c)  md=modo  pm=modo anterior  b=rebote(1/0)
+ *              x,y=posición propia  tg=objetivo "x,y" o null  d=distancia BFS
+ *              ch=quesos en el piso  vc=casillas visibles  ev=tipos de evento
+ *   ratón    → c=lleva queso(1/0)  h=heavy(1/0)  ih=num. de agujero o null
+ *              bl=cascabel o null  bL=cascabel fuerte(1/0)
+ *              cat=gato visto [x,y,dirección,estamina] o null
+ *   gato     → st=estamina  f=dirección  sc=casillas con olor
+ *              sm=olor más fuerte (0..1) o null
+ *              mo=ratón visto [x,y,llevaQueso(1/0)] o null
+ * `tunneling` no tiene clave propia: su único rastro en el registro es
+ * "md":"TUNEL" (ver decideMouse); no hace falta repetirlo acá.
+ */
+function buildLogFields(obs, role, mode, prevMode, bounce, target, dist) {
+  const isMouse = role === 'mouse';
+  const common = {
+    t: obs.turn,
+    r: roleCode(role),
+    md: mode,
+    pm: prevMode,
+    b: toBit(bounce),
+    x: obs.you.x,
+    y: obs.you.y,
+    tg: target || null,
+    d: dist === undefined ? null : dist,
+    ch: obs.cheese.length,
+    vc: obs.visible.length,
+    ev: obs.events.map((e) => e.type),
+  };
+  const roleFields = isMouse
+    ? {
+        c: toBit(obs.you.carrying),
+        h: toBit(obs.you.heavy),
+        ih: obs.you.inHole,
+        bl: obs.bell === undefined ? null : obs.bell,
+        bL: toBit(obs.bellLoud),
+        cat: obs.cat ? [obs.cat.x, obs.cat.y, obs.cat.facing, obs.cat.stamina] : null,
+      }
+    : {
+        st: obs.you.stamina,
+        f: obs.you.facing,
+        sc: obs.scent.length,
+        sm: maxScentStrength(obs.scent),
+        mo: obs.mouse ? [obs.mouse.x, obs.mouse.y, toBit(obs.mouse.carrying)] : null,
+      };
+  return { ...common, ...roleFields };
+}
+
+/** Encabezado del turno 1 (LOGS.md "Línea de encabezado"), para ubicar capturas en la entrance. */
 function logEntrances(map, obs, role) {
-  const entrances = map.holes.map((hole, i) => ({ hole: i, x: hole.entrance.x, y: hole.entrance.y }));
+  const entrances = map.holes.map((hole) => [hole.entrance.x, hole.entrance.y]);
   console.log('D|' + JSON.stringify({
-    turn: 1,
-    role,
-    entrances,
-    width: map.width,
-    height: map.height,
-    holeCount: map.holes.length,
-    cheeseCount: obs.cheese.length,
+    hdr: 1,
+    r: roleCode(role),
+    w: map.width,
+    hg: map.height,
+    hc: map.holes.length,
+    ch: obs.cheese.length,
+    en: entrances,
   }));
 }
 

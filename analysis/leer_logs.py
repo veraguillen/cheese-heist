@@ -27,6 +27,63 @@ import pandas as pd
 
 PATRON = re.compile(r"D\|(\{.*\})")
 
+# resumen() ya espera las columnas "t", "rol" y "modo" (las únicas que
+# realmente usa para agrupar y pivotear). Pero ni v1 ni v2 escriben esas
+# claves tal cual: v1 usaba nombres largos en inglés ("turn", "role", "mode",
+# ...) y v2 (LOGS.md) usa claves cortas ("t", "r", "md", ...). Este
+# diccionario traduce las dos variantes al mismo nombre completo, para que
+# el resto del script (resumen() incluido) no tenga que saber de qué versión
+# vino cada fila. Las claves que no estén acá (o que ya coincidan, como "x"
+# e "y") quedan sin tocar.
+CLAVES_A_NOMBRES_COMPLETOS = {
+    # --- v1: nombres largos en inglés -> nombre completo común ---
+    "turn": "t",
+    "role": "rol",
+    "mode": "modo",
+    "prevMode": "prevModo",
+    "bounce": "rebote",
+    # el resto de v1 (target, dist, cheeseCount, visibleCount, eventTypes,
+    # carrying, heavy, inHole, bell, bellLoud, cat, stamina, facing,
+    # scentCount, scentMax, mouse, entrances, width, height, holeCount) ya
+    # usaba el nombre completo, así que no hace falta traducirlo.
+    # --- v2 (LOGS.md): claves cortas -> nombre completo común ---
+    "t": "t",
+    "r": "rol",
+    "md": "modo",
+    "pm": "prevModo",
+    "b": "rebote",
+    "tg": "target",
+    "d": "dist",
+    "ch": "cheeseCount",
+    "vc": "visibleCount",
+    "ev": "eventTypes",
+    "c": "carrying",
+    "h": "heavy",
+    "ih": "inHole",
+    "bl": "bell",
+    "bL": "bellLoud",
+    "cat": "cat",
+    "st": "stamina",
+    "f": "facing",
+    "sc": "scentCount",
+    "sm": "scentMax",
+    "mo": "mouse",
+    "en": "entrances",
+    "w": "width",
+    "hg": "height",
+    "hc": "holeCount",
+    "hdr": "hdr",
+}
+
+
+def traducir_claves(dato: dict) -> dict:
+    """Renombra las claves de v1 (largas) y v2 (cortas, LOGS.md) al mismo
+    nombre completo, para que el resto del script lea los dos formatos sin
+    distinguir de dónde vino cada fila. Lo que no esté en el diccionario
+    queda sin tocar.
+    """
+    return {CLAVES_A_NOMBRES_COMPLETOS.get(clave, clave): valor for clave, valor in dato.items()}
+
 
 def leer_archivo(ruta: Path) -> list[dict]:
     filas = []
@@ -39,6 +96,7 @@ def leer_archivo(ruta: Path) -> list[dict]:
         except json.JSONDecodeError:
             print(f"  aviso: JSON inválido en {ruta.name}, línea {n}")
             continue
+        dato = traducir_claves(dato)
         dato["version"] = ruta.parent.name
         dato["archivo"] = ruta.name
         dato["rival"] = ruta.stem.rsplit("_", 1)[0].lower()
