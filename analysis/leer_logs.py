@@ -10,22 +10,23 @@ O desde un notebook:
     df = cargar("data")
 
 Cómo funciona:
-- Busca en cada archivo las líneas que contienen "D|" seguido de un JSON.
-  Esas líneas las imprime el bot desde la v1 con console.log.
-- No depende del formato del turn log de Meowtel: solo busca "D|{...}".
-  Cuando conozcamos ese formato, agregamos la lectura de posiciones y eventos.
+- Cada archivo es un turn log de Meowtel en formato JSONL: la línea 1 es un
+  encabezado (con el resultado final y las reglas de la casa, entre otras
+  cosas) y cada línea siguiente es un turno completo.
+- De la línea 1 guardamos "result" y "rules" (si están) y los repetimos en
+  cada fila de ese archivo, para poder cruzarlos con los turnos.
+- De cada turno recorremos logs.cat y logs.mouse (arrays de las líneas que
+  imprimió TU bot con console.log; Meowtel no expone las del rival) y nos
+  quedamos con las que empiezan con "D|{...}": esas son nuestras.
 - La versión sale del nombre de la carpeta (data/v1/...) y el rival del
   nombre del archivo (por ejemplo timothy_01.log -> "timothy").
 """
 
 import json
-import re
 import sys
 from pathlib import Path
 
 import pandas as pd
-
-PATRON = re.compile(r"D\|(\{.*\})")
 
 # resumen() ya espera las columnas "t", "rol" y "modo" (las únicas que
 # realmente usa para agrupar y pivotear). Pero ni v1 ni v2 escriben esas
@@ -87,20 +88,55 @@ def traducir_claves(dato: dict) -> dict:
 
 def leer_archivo(ruta: Path) -> list[dict]:
     filas = []
-    for n, linea in enumerate(ruta.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
-        m = PATRON.search(linea)
-        if not m:
-            continue
+    lineas = ruta.read_text(encoding="utf-8", errors="replace").splitlines()
+    if not lineas:
+        return filas
+
+    # Línea 1: encabezado del turn log (no es un turno). Si tiene "result" o
+    # "rules", los guardamos para pegarlos en cada fila de este archivo.
+    resultado_final = None
+    reglas_casa = None
+    try:
+        encabezado = json.loads(lineas[0])
+    except json.JSONDecodeError:
+        encabezado = None
+    if isinstance(encabezado, dict):
+        resultado_final = encabezado.get("result")
+        reglas_casa = encabezado.get("rules")
+
+    # Desde la línea 2, cada línea es un turno. "logs.cat"/"logs.mouse" trae
+    # SOLO las líneas de console.log de tu propio rol en ese turno (Meowtel
+    # no expone las del rival); de ahí sacamos las que empiezan con "D|".
+    for n, linea in enumerate(lineas[1:], 2):
         try:
-            dato = json.loads(m.group(1))
+            turno = json.loads(linea)
         except json.JSONDecodeError:
-            print(f"  aviso: JSON inválido en {ruta.name}, línea {n}")
+            print(f"  aviso: línea {n} de {ruta.name} no es un turno JSON válido, se saltea")
             continue
-        dato = traducir_claves(dato)
-        dato["version"] = ruta.parent.name
-        dato["archivo"] = ruta.name
-        dato["rival"] = ruta.stem.rsplit("_", 1)[0].lower()
-        filas.append(dato)
+        if not isinstance(turno, dict):
+            continue
+        logs = turno.get("logs") or {}
+        for rol_logs in ("cat", "mouse"):
+            for cadena in logs.get(rol_logs) or []:
+                if not isinstance(cadena, str) or not cadena.startswith("D|"):
+                    continue
+                try:
+                    dato = json.loads(cadena[2:])
+                except json.JSONDecodeError:
+                    print(f"  aviso: JSON inválido en {ruta.name}, línea {n}")
+                    continue
+                dato = traducir_claves(dato)
+                # El nombre del archivo es <rival>_m<N>_<rol> (por ejemplo
+                # timothy_m1_cat.jsonl): la primera parte es el rival y la
+                # segunda, el número de partida ("m1").
+                partes = ruta.stem.split("_")
+                dato["version"] = ruta.parent.name
+                dato["archivo"] = ruta.name
+                dato["rival"] = partes[0].lower()
+                dato["match"] = partes[1] if len(partes) > 1 else None
+                dato["resultado_final"] = resultado_final
+                dato["reglas_casa"] = reglas_casa
+                filas.append(dato)
     return filas
 
 
