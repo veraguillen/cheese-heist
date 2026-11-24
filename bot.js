@@ -1,9 +1,8 @@
-// Midnight Kitchen — bot v5.
+// Midnight Kitchen — bot v6.
 //
-// Ratón: sin ruta segura a un agujero y el gato lejos (cd>=3), suelta el
-// queso (SOLTAR); recuerda al gato 10 turnos y se compromete con un queso.
-// Gato: solo embosca si llega a tiempo al pickup; en SEGUIR_OLOR no repite
-// sus últimas 6 casillas (si no queda ninguna, pasa a la prioridad siguiente).
+// Ratón: sin cambios desde v5 (SOLTAR, memoria del gato, compromiso de queso).
+// Gato: en VIGILAR_QUESO o EMBOSCADA, quieto (STAY), gira para mirar hacia
+// donde puede aparecer el ratón en vez de mirar para cualquier lado.
 
 // --------------------------------------------------------------- utilidades
 
@@ -574,9 +573,14 @@ function actualizarMemoriaGato(obs, catGraph, catStartKey, mouseGraphForCat, ent
         const aTiempo = dGato <= dRaton;
         console.log('D|' + JSON.stringify({ t: obs.turn, r: 'c', emb: toBit(aTiempo), dg: dGatoRaw, dr: dRaton }));
         memory.persecucionQueso = aTiempo ? entranceKey : null;
+        // v6: pickupKey viaja con persecucionQueso -- EMBOSCADA lo usa para
+        // mirar hacia el pasillo por donde vuelve el ratón, no hacia el
+        // agujero (ahí ya está parado).
+        memory.pickupKey = aTiempo ? pickupKey : null;
       }
     } else if (ev.type === 'delivered' || ev.type === 'caught' || ev.type === 'dropped') {
       memory.persecucionQueso = null;
+      memory.pickupKey = null;
     }
   }
 }
@@ -609,27 +613,96 @@ function decideEmboscada(obs, startKey, catGraph, memory) {
   return stayResult('VIGILAR_QUESO', 'sin ratón, olor ni queso: espero');
 }
 
+/**
+ * Primer paso BFS hacia targetKey, o null sin objetivo, sin camino o si ya
+ * se está ahí (distancia 0: no hay "hacia dónde" que mirar).
+ */
+function primerPasoHacia(graph, startKey, targetKey) {
+  if (!targetKey) return null;
+  const bfs = bfsFirstStep(graph, startKey, (k) => k === targetKey);
+  if (!bfs || bfs.dir === 'STAY') return null;
+  return bfs.dir;
+}
+
+/**
+ * D3: sin nada que vigilar (o ya parado en la entrada), mirar en rotación
+ * fija N,E,S,W -- así el gato eventualmente cubre los cuatro lados en vez
+ * de quedarse mirando para uno solo todo el partido.
+ */
+function giroLook(memory) {
+  const dir = ['N', 'E', 'S', 'W'][memory.giro % 4];
+  memory.giro++;
+  return dir;
+}
+
+/**
+ * Agujero más cercano al queso por el GRAFO DEL RATÓN (el del gato no tiene
+ * los agujeros como nodo). Empate: el primero en el orden de map.holes
+ * (sale solo: solo se reemplaza con una distancia estrictamente menor).
+ * Devuelve el índice en holeTileKeys, o null si no hay camino a ninguno.
+ */
+function agujeroMasCercanoAlQueso(mouseGraphForCat, holeTileKeys, quesoKey) {
+  let mejor = null;
+  for (let i = 0; i < holeTileKeys.length; i++) {
+    const d = distanceBetween(mouseGraphForCat, quesoKey, holeTileKeys[i]);
+    if (d !== null && (mejor === null || d < mejor.dist)) mejor = { i, dist: d };
+  }
+  return mejor ? mejor.i : null;
+}
+
+/**
+ * MIRAR HACIA LA AMENAZA (v6): con STAY en VIGILAR_QUESO o EMBOSCADA, mirar
+ * hacia donde puede aparecer el ratón en vez de para cualquier lado -- hoy
+ * eso pasa solo 2 de cada 10 turnos. Mientras camina (move != STAY) no hay
+ * nada que mirar aparte de adelante, así que no se emite look.
+ */
+function elegirLook(obs, startKey, result, catGraph, mouseGraphForCat, holeTileKeys, entranceByHole, memory) {
+  if (result.move !== 'STAY') return null;
+
+  if (result.mode === 'EMBOSCADA') {
+    // Ya está en la entrada (por eso es STAY): mira hacia el pasillo por
+    // donde vuelve el ratón, no hacia el agujero que tiene al lado.
+    return primerPasoHacia(catGraph, startKey, memory.pickupKey);
+  }
+  if (result.mode !== 'VIGILAR_QUESO') return null; // nunca en PERSEGUIR/SEGUIR_OLOR.
+
+  if (obs.cheese.length === 0) return giroLook(memory); // D3: sin nada que vigilar.
+
+  const quesoKey = result.target;
+  if (!quesoKey) return null; // sin camino al queso: sin objetivo que mirar.
+  const i = agujeroMasCercanoAlQueso(mouseGraphForCat, holeTileKeys, quesoKey);
+  if (i === null) return null;
+  const entranceKey = entranceByHole[holeTileKeys[i]];
+  if (startKey === entranceKey) return giroLook(memory); // D2: ya en la entrada.
+  return primerPasoHacia(catGraph, startKey, entranceKey);
+}
+
 /** Prioridad fija del gato: PERSEGUIR, SEGUIR_OLOR, EMBOSCADA. */
-function decideCat(obs, graph, mouseGraphForCat, entranceByHole, memory) {
+function decideCat(obs, graph, mouseGraphForCat, entranceByHole, holeTileKeysForCat, memory) {
   const startKey = keyOf(obs.you.x, obs.you.y);
   actualizarMemoriaGato(obs, graph, startKey, mouseGraphForCat, entranceByHole, memory);
   recordarPosicionPropia(startKey, memory);
 
-  // 1) PERSEGUIR: lo tenemos a la vista, vamos directo.
+  // 1) PERSEGUIR: lo tenemos a la vista, vamos directo. Nunca hay look acá.
   if (obs.mouse !== null) {
     const mouseKey = keyOf(obs.mouse.x, obs.mouse.y);
     const bfs = bfsFirstStep(graph, startKey, (k) => k === mouseKey);
-    return moveResultFromBfs('PERSEGUIR', bfs, 'persiguiendo al ratón visible');
+    const result = moveResultFromBfs('PERSEGUIR', bfs, 'persiguiendo al ratón visible');
+    result.look = null;
+    return result;
   }
 
   // 2) SEGUIR_OLOR: no se ve, pero hay rastro. Sin vaivén (DISENO_V5.md #4):
-  // ignora las casillas que ya pisó en sus últimas 6 posiciones.
+  // ignora las casillas que ya pisó en sus últimas 6 posiciones. Tampoco
+  // hay look acá.
   if (obs.scent.length > 0) {
     const scentSinVaiven = obs.scent.filter(([x, y]) => !memory.posiciones.includes(keyOf(x, y)));
     const targets = strongestScentTargets(scentSinVaiven, startKey);
     if (targets.size > 0) {
       const bfs = bfsFirstStep(graph, startKey, (k) => targets.has(k));
-      return moveResultFromBfs('SEGUIR_OLOR', bfs, 'siguiendo la casilla con más olor, sin repetir mis últimas 6 posiciones');
+      const result = moveResultFromBfs('SEGUIR_OLOR', bfs, 'siguiendo la casilla con más olor, sin repetir mis últimas 6 posiciones');
+      result.look = null;
+      return result;
     }
     // Sin casillas de olor válidas: no hago STAY, caigo a la prioridad
     // siguiente en vez de quedarme esperando sobre olor viejo. Esto también
@@ -638,7 +711,9 @@ function decideCat(obs, graph, mouseGraphForCat, entranceByHole, memory) {
   }
 
   // 3) EMBOSCADA / VIGILAR_QUESO: sin rastro útil ni vista, cubrir el queso.
-  return decideEmboscada(obs, startKey, graph, memory);
+  const result = decideEmboscada(obs, startKey, graph, memory);
+  result.look = elegirLook(obs, startKey, result, graph, mouseGraphForCat, holeTileKeysForCat, entranceByHole, memory);
+  return result;
 }
 
 // ------------------------------------------------------------------ registro
@@ -699,12 +774,13 @@ function toBit(value) {
  *   gato     → st=estamina  f=dirección  sc=casillas con olor
  *              sm=olor más fuerte (0..1) o null
  *              mo=ratón visto [x,y,llevaQueso(1/0)] o null
+ *              lk=(v6) dirección del look emitido este turno, o null
  * `tunneling` no tiene clave propia: su único rastro en el registro es
  * "md":"TUNEL" (ver decideMouse); no hace falta repetirlo acá. `md` también
  * puede valer "ALEJARSE" desde v2 (DISENO_V2.md §5), "EMBOSCADA" desde v3 o
  * "SOLTAR" desde v5 (DISENO_V5.md §1).
  */
-function buildLogFields(obs, role, mode, prevMode, bounce, target, dist, catDist, deviated, margin, gatoRecordado, quesoIgnorado) {
+function buildLogFields(obs, role, mode, prevMode, bounce, target, dist, catDist, deviated, margin, gatoRecordado, quesoIgnorado, look) {
   const isMouse = role === 'mouse';
   const common = {
     t: obs.turn,
@@ -740,6 +816,7 @@ function buildLogFields(obs, role, mode, prevMode, bounce, target, dist, catDist
         sc: obs.scent.length,
         sm: maxScentStrength(obs.scent),
         mo: obs.mouse ? [obs.mouse.x, obs.mouse.y, toBit(obs.mouse.carrying)] : null,
+        lk: look === undefined ? null : look,
       };
   return { ...common, ...roleFields };
 }
@@ -784,10 +861,14 @@ function createBot(setup) {
   const entranceByHole = role === 'cat'
     ? Object.fromEntries(map.holes.map((h) => [keyOf(h.x, h.y), keyOf(h.entrance.x, h.entrance.y)]))
     : null;
+  // v6 (elegirLook) necesita las claves de los agujeros en el mismo orden
+  // de map.holes, para el desempate de agujeroMasCercanoAlQueso.
+  const holeTileKeysForCat = role === 'cat' ? map.holes.map((h) => keyOf(h.x, h.y)) : null;
   // Memoria del gato: sobrevive entre turnos para decidir (no solo para
   // loguear), a diferencia de modeHistory de abajo. `posiciones` es
-  // DISENO_V5.md #4 (últimas 6, para no volver sobre olor viejo).
-  const catMemory = role === 'cat' ? { persecucionQueso: null, posiciones: [] } : null;
+  // DISENO_V5.md #4 (últimas 6, para no volver sobre olor viejo); `pickupKey`
+  // y `giro` son de v6 (mirar hacia la amenaza).
+  const catMemory = role === 'cat' ? { persecucionQueso: null, posiciones: [], pickupKey: null, giro: 0 } : null;
 
   // Memoria del ratón (DISENO_V5.md #2 y #1b): última vez que vio al gato,
   // el queso al que se comprometió en IR_AL_QUESO y el que acaba de soltar.
@@ -801,7 +882,7 @@ function createBot(setup) {
     if (obs.turn === 1) logEntrances(map, obs, role);
 
     const decision = role === 'cat'
-      ? decideCat(obs, graph, mouseGraphForCat, entranceByHole, catMemory)
+      ? decideCat(obs, graph, mouseGraphForCat, entranceByHole, holeTileKeysForCat, catMemory)
       : decideMouse(obs, graph, holeKeys, catGraph, holeEntranceKeys, mouseMemory);
 
     const prevMode = modeHistory.length ? modeHistory[modeHistory.length - 1] : null;
@@ -811,12 +892,13 @@ function createBot(setup) {
 
     const logLine = buildLogFields(
       obs, role, decision.mode, prevMode, bounce, decision.target, decision.dist,
-      decision.catDist, decision.deviated, decision.margin, decision.gm, decision.qs,
+      decision.catDist, decision.deviated, decision.margin, decision.gm, decision.qs, decision.look,
     );
     console.log('D|' + JSON.stringify(logLine));
 
     const action = { move: decision.move, debug: clampText(decision.debug, rules.debugMaxChars) };
     if (decision.drop) action.drop = true;
+    if (decision.look) action.look = decision.look;
     if (decision.path) {
       const debugTiles = routeToDebugTiles(decision.path, rules.debugMaxTiles);
       if (debugTiles.length) action.debugTiles = debugTiles;

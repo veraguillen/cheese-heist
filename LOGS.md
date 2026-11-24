@@ -68,6 +68,7 @@ Ejemplo: `D|{"hdr":1,"r":"m","w":21,"hg":15,"hc":3,"ch":2,"en":[[3,1],[10,13],[1
 | `sc` | Casillas con olor | `12` |
 | `sm` | Olor más fuerte (0 a 1), o `null` | `0.93` |
 | `mo` | Ratón visto: `[x, y, lleva queso 1/0]`, o `null` | `[16,12,1]` |
+| `lk` | (v6) Dirección del `look` emitido este turno, o `null` si no se emitió | `"W"` |
 
 ## Línea de emboscada a tiempo (gato, solo en el turno de un evento `pickup`)
 
