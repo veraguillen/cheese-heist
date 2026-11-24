@@ -1,0 +1,154 @@
+=== CONTROL DE CALIDAD (data/v5) ===
+piernas leídas: 217 | OK: 217 | excluidas: 0
+Campos de rules encontrados: botTimeMs, catStaminaMax, catVisionRange, catchPoints, cheesePoints, debugMaxChars, debugMaxTiles, gameTimeMs, height, hidingTaxEvery, initTimeMs, maxTurns, mouseVisionRange, width
+
+=== A) EPISODIOS DEL RATÓN ===
+fin    caught  delivered  dropped  fin_partida  vuelve_sin_queso
+bot                                                             
+mio       578        543       16           92                93
+rival      10        521       34           93               439
+
+=== B) EPISODIOS DEL GATO ===
+fin    caught  delivered  dropped  fin_partida
+bot                                           
+mio        13        523       39            6
+rival     462        545       16           27
+cheeseSpawned -> pickup: 12.3 turnos en promedio (n=1224)
+
+=== D) RIESGO POR CAUSA (Logit, cluster por partida) ===
+ratón: captura (n_obs=38807, n_eventos=578):
+             odds_ratio  ci95_bajo  ci95_alto
+const              0.00       0.00       0.01
+fase_VUELTA        1.89       1.31       2.74
+h_1.0             13.44      10.37      17.43
+  aviso: ratón: entrega: separación perfecta con ['h'] (coeficiente o IC no finito); se prueba con menos variables
+ratón: entrega (n_obs=12572, n_eventos=543):
+gato: entrega (n_obs=7755, n_eventos=523):
+                 odds_ratio  ci95_bajo  ci95_alto
+const                  0.07       0.07       0.08
+raton_visto_1.0        0.76       0.51       1.14
+  aviso: gato: captura: 13 eventos insuficientes para 10 parámetros, se sacan variables
+  aviso: gato: captura: 13 eventos insuficientes para 9 parámetros, se sacan variables
+  aviso: gato: captura: 13 eventos insuficientes para 6 parámetros, se sacan variables
+  aviso: gato: captura: 13 eventos insuficientes para 4 parámetros, se sacan variables
+  aviso: gato: captura: separación perfecta con ['raton_visto'] (coeficiente o IC no finito); se prueba con menos variables
+gato: captura (n_obs=7755, n_eventos=13):
+
+=== E) COMPARACIÓN PAREADA POR CASA ===
+diff_raton: media=0.62 IC95%=[-3.61, 4.86] (n=53)
+diff_gato: media=-16.11 IC95%=[-19.71, -12.52] (n=53)
+  cottage: diff_raton media=1.50 (n=14)
+  kitchen: diff_raton media=3.23 (n=13)
+  mansion: diff_raton media=-5.00 (n=12)
+  pantry: diff_raton media=-0.50 (n=6)
+  ranch: diff_raton media=4.12 (n=8)
+
+=== F) TASA AJUSTADA (beta-binomial) ===
+Captura de mi ratón por casa:
+          episodios  eventos  tasa_cruda  tasa_ajustada
+casa                                                   
+19x13_4h        356      150       0.421          0.426
+25x17_4h        450      190       0.422          0.426
+29x19_3h        236      124       0.525          0.505
+31x15_8h        280      114       0.407          0.415
+Captura de mi ratón por rival:
+                       episodios  eventos  tasa_cruda  tasa_ajustada
+rival                                                               
+agustin-meowtel              102       70       0.686          0.670
+benser22                      78       38       0.487          0.480
+bruno-meowtel                170       93       0.547          0.542
+guidodealbera                 74       20       0.270          0.278
+imanol-meowtel               144       88       0.611          0.602
+jcesaraguilar                 16        0       0.000          0.099
+joserodrim2                   24        8       0.333          0.342
+jsstagno90                    86       26       0.302          0.307
+lucas-meowtel                 34       16       0.471          0.457
+lucasale1994                  62       16       0.258          0.268
+martincanoarg                 46        4       0.087          0.119
+porrettiaaron                 94       34       0.362          0.363
+rafaelsilva-kingorren        114       26       0.228          0.235
+rromero96                     64       24       0.375          0.375
+timothy                      150       88       0.587          0.579
+v33ro                         64       27       0.422          0.418
+Entrega rival (contra mi gato) por casa:
+          episodios  eventos  tasa_cruda  tasa_ajustada
+casa                                                   
+19x13_4h        142      132       0.930          0.925
+25x17_4h        184      166       0.902          0.902
+29x19_3h        130      124       0.954          0.946
+31x15_8h        125      101       0.808          0.821
+Entrega rival (contra mi gato) por rival:
+                       episodios  eventos  tasa_cruda  tasa_ajustada
+rival                                                               
+agustin-meowtel                8        8       1.000          0.976
+benser22                      24       24       1.000          0.991
+bruno-meowtel                 96       83       0.865          0.866
+guidodealbera                 20       20       1.000          0.989
+imanol-meowtel                42       42       1.000          0.994
+jcesaraguilar                  8        8       1.000          0.976
+joserodrim2                   44       40       0.909          0.909
+jsstagno90                    38       38       1.000          0.994
+lucas-meowtel                 50       48       0.960          0.957
+lucasale1994                  36       30       0.833          0.838
+martincanoarg                 38       34       0.895          0.896
+porrettiaaron                 68       62       0.912          0.912
+rafaelsilva-kingorren         18        8       0.444          0.505
+rromero96                     10       10       1.000          0.980
+timothy                       40       40       1.000          0.994
+v33ro                         41       28       0.683          0.697
+
+=== G) CRITERIOS DE v5 (contra v3.1 en data/rivals) ===
+% capturas con queso (v5): 80% (n=578)
+% capturas con queso (v3.1): 89% (n=27)
+SOLTAR: 16 veces (gm=1 en 0); captura en los 5 turnos siguientes en 4
+Turnos trabado (ratón, vaivén A,B,A) por partida: v5=11.8 (n=108), v3.1=86.2 (n=4)
+Turnos de rebote en SEGUIR_OLOR por partida: v5=1.6 (n=63), v3.1=92.5 (n=2)
+Emboscadas a tiempo (v5): 52/581 pickups (9%)
+Entregas rivales por partida: v5=5.68 (n=92), v3.1=9.33 (n=3)
+
+=== H) VALIDAR LA VISIÓN DEL GATO (mío) ===
+clase
+DE_COSTADO     0.38
+DE_ESPALDAS    0.24
+DE_FRENTE      0.20
+MIRA_PARED     0.17
+Pickups rivales: vi al ratón en los 10 turnos previos en 8% (n=581)
+  de esos, de frente o a distancia 1 la primera vez: 58% (n=45)
+Tras perder de vista al ratón (10 turnos siguientes):
+resultado
+nada       0.92
+entrega    0.06
+captura    0.01
+
+=== I) VALIDAR LA CARRERA DEL RATÓN (mío) ===
+margen en pickups que terminaron en caught: media=-8.12 mediana=-8.09 p10=-14.67 p90=-1.50 (n=243, sin gato (NaN)=229)
+margen en pickups que terminaron en delivered: media=3.41 mediana=5.00 p10=-10.10 p90=15.41 (n=233, sin gato (NaN)=314)
+umbrales de margen -- (a) solo pickups con margen calculado (sin los NaN):
+  margen<-6: caught bloqueado 67% (163/243), delivered bloqueado 18% (42/233), neto=+363 (+4.03/partida)
+  margen<-4: caught bloqueado 85% (207/243), delivered bloqueado 28% (66/233), neto=+423 (+4.70/partida)
+  margen<-2: caught bloqueado 88% (215/243), delivered bloqueado 32% (74/233), neto=+423 (+4.70/partida)
+  margen<0: caught bloqueado 93% (225/243), delivered bloqueado 35% (82/233), neto=+429 (+4.77/partida)
+umbrales de margen -- (b) todos los pickups (NaN cuenta en el total, nunca bloqueado):
+  margen<-6: caught bloqueado 35% (163/472), delivered bloqueado 8% (42/547), neto=+363 (+3.42/partida)
+  margen<-4: caught bloqueado 44% (207/472), delivered bloqueado 12% (66/547), neto=+423 (+3.99/partida)
+  margen<-2: caught bloqueado 46% (215/472), delivered bloqueado 14% (74/547), neto=+423 (+3.99/partida)
+  margen<0: caught bloqueado 48% (225/472), delivered bloqueado 15% (82/547), neto=+429 (+4.05/partida)
+
+=== K1) OPORTUNIDADES DE SPRINT DEL GATO (mío) ===
+oportunidades: 117 en total, 3.90 por partida (n=30 partidas)
+terminaron en captura en los 3 turnos siguientes: 0/117 (0%)
+
+=== K3) pPesado POR CASA (beta-binomial) ===
+media entre casas=0.265 varianza=0.00039 a=131.74 b=365.72
+            turnos_con_queso  turnos_h1  p_pesado_cruda  p_pesado_ajustada
+house_type                                                                
+cottage                 2698        662           0.245              0.248
+kitchen                 3636        976           0.268              0.268
+mansion                 2552        750           0.294              0.289
+pantry                  1776        478           0.269              0.268
+ranch                   1937        479           0.247              0.251
+
+=== TOP 3: dónde pierdo más puntos que el rival en la misma situación ===
+  [gato] d_gato_entrada=3-6: mío=-1.06 rival=1.36 (diff=2.42, n_mio=17) -> candidata: emb (emboscada a tiempo)
+  [gato] d_gato_entrada=>6: mío=-2.71 rival=-0.46 (diff=2.25, n_mio=559) -> candidata: emb (emboscada a tiempo)
+  [ratón] dist_min_gato=<=2: mío=-2.17 rival=-0.42 (diff=1.74, n_mio=730) -> candidata: cd/gm (memoria del gato)
