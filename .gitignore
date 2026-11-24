@@ -1,0 +1,32 @@
+# --- Archivos personales (no van al repo público) ---
+PLAN.md
+INSTRUCCIONES_PROYECTO.md
+GLOSSARY.md
+REGLAS_ES.md
+# --- Node ---
+node_modules/
+npm-debug.log*
+
+# --- Python ---
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.venv/
+venv/
+
+# --- Secretos ---
+.env
+.env.*
+
+# --- Sistema y editor ---
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+
+# --- Bot: copias de versiones viejas y artefactos de análisis ---
+bot_v*.js
+*.diff
+.pytest_cache/
+data/*/raw/
+analysis/salida/*.csv
