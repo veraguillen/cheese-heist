@@ -8,6 +8,8 @@ CHANGELOG — Midnight Kitchen bot
 | v1 | 23 nov | Si ambos roles se mueven con BFS hacia un objetivo con prioridad fija, el bot pasa de no jugar a sumar entregas y capturas, y obtengo una línea base medida. | Movimiento BFS por caminos reales con máquina de estados de prioridad fija, en gato y ratón; registro D\| con variables de observación. | — → | Reemplazada por v2 (n = 2 contra Timothy; excepción a la regla de 10 partidas por el tamaño del efecto) |
 | v2 | 23 nov | Si el ratón evita las casillas a 2 o menos del gato que ve (por camino real), y se aleja cuando no hay ruta segura, espero que las capturas por partida bajen al menos a la mitad, porque en v1 el 94 % de las capturas ocurrieron con el gato visible antes, casi siempre a 3 casillas o más. | El ratón reacciona al gato que ve: esquiva su zona de peligro (radio 2) y, sin ruta segura, va al agujero o se aleja. Aparte, sin efecto en el juego: registro compacto (LOGS.md). | — → | Mantener (provisional, n = 3) |
 | v3 | 24 nov. | Ratón: si el ratón con queso vuelve al agujero con más margen sobre el gato visible, en vez de al más cercano, espero que bajen las capturas con queso, porque en v2 el 90 % fueron volviendo, a 1 casilla del agujero. Gato: si el gato espera en la entrada del agujero más cercano al queso, en vez de sobre el queso, espero al menos 1 captura por partida y menos entregas de Timothy, porque en v2 pasó el 98 % del tiempo sobre el queso y vio al ratón en 5 de 1200 turnos. | Un cambio por rol. Ratón (R2): con queso y gato visible, elige el agujero con ruta segura de mayor margen. Gato (G2): EMBOSCADA reemplaza a VIGILAR_QUESO; espera en la entrada del agujero más cercano al queso y, tras un pickup, mantiene la entrada más cercana a ese lugar hasta un delivered, caught o dropped. Registro: campo mg y modo EMBOSCADA. | → | |
+| v5 | 24 nov. | Raton: si suelta el queso al huir sin ruta segura y recuerda al gato 10 turnos, bajan las capturas con queso y los turnos trabado. Gato: si solo embosca cuando llega antes y no repite olor de sus ultimas 6 casillas, cede menos entregas. | Raton: SOLTAR (1), ignorar el queso soltado con gato visto o recordado (1b), memoria del gato y compromiso con un queso (2). Gato: emboscada a tiempo (3), sin vaiven por olor (4). | → | |
+| v6 | 24 nov. | Si el gato, quieto vigilando o emboscando, mira hacia el camino por donde llega el raton, lo ve antes del pickup mas seguido y bajan las entregas rivales, porque hoy mira hacia la entrada solo el 20 % de esos turnos. | Gato: look hacia la entrada del agujero mas cercano al queso (VIGILAR_QUESO) o hacia el pickup (EMBOSCADA) cuando hace STAY; giro N, E, S, W sin queso o ya en la entrada. Campo lk. El raton no cambia. | → | |
 Formato de cada entrada
 vX — fecha
 Hipótesis: Si cambio X, espero que mejore Y porque Z.
@@ -70,3 +72,27 @@ Decisión: mantener (provisional, n = 3). Cumple el criterio de §8 en promedio 
 - **Qué observar en 10 partidas:** Contra Timothy, por pierna y por tipo de casa. Ratón: capturas con queso (base 26 en 3 partidas), entregas (base 7, mínimo 5), mg. Gato: capturas (base 0), entregas de Timothy (base 4), turnos en EMBOSCADA, cambios de tg, impuesto cobrado.
 - **Resultado (contra Timothy / contra el resto):**
 - **Decisión:** pendiente
+
+## v5 — 24 nov.
+- **Hipótesis:** Raton: si suelta el queso al huir sin ruta segura y recuerda al gato 10 turnos, bajan las capturas con queso y los turnos trabado. Gato: si solo embosca cuando llega antes y no repite olor de sus ultimas 6 casillas, cede menos entregas.
+- **Cambio (uno solo):** Raton: SOLTAR (1), ignorar el queso soltado con gato visto o recordado (1b), memoria del gato y compromiso con un queso (2). Gato: emboscada a tiempo (3), sin vaiven por olor (4).
+- **Por qué (qué vi en los datos):** 
+- **Decidí yo:** Elegi las 4 ideas desde el analisis de rivales (opcion A); la opcion B para despues de soltar; acepte que el olor solo en mi casilla pase a la prioridad siguiente.
+- **Sugirió la IA:** Propuso las opciones con trade-offs, detecto el riesgo de quedarse quieto sobre el queso soltado y el ciclo de soltar y recoger, pidio validar los casos c y g contra el codigo viejo y separar la linea emb en leer_logs.py; Claude Code generalizo la regla del olor (supuesto 4).
+- **Modelo / razonamiento:** Claude Opus 5.5 (Claude Code) / <nivel>
+- **Texto enviado en "What changed, and why?":** <pega el texto del punto d>
+- **Qué observar en 10 partidas:** 
+- **Resultado (contra Timothy / contra el resto):**
+- **Decisión:** mantener / ajustar / revertir
+
+## v6 — 24 nov.
+- **Hipótesis:** Si el gato, quieto vigilando o emboscando, mira hacia el camino por donde llega el raton, lo ve antes del pickup mas seguido y bajan las entregas rivales, porque hoy mira hacia la entrada solo el 20 % de esos turnos.
+- **Cambio (uno solo):** Gato: look hacia la entrada del agujero mas cercano al queso (VIGILAR_QUESO) o hacia el pickup (EMBOSCADA) cuando hace STAY; giro N, E, S, W sin queso o ya en la entrada. Campo lk. El raton no cambia.
+- **Por qué (qué vi en los datos):** 
+- **Decidí yo:** Elegi la opcion A (solo el gato) por la comparacion pareada: gato -16,1 por partida, raton +0,6. Precise memory.pickupKey y memory.giro en la especificacion.
+- **Sugirió la IA:** Propuso usar look desde la validacion de vision (20 % de frente, 8 % visto antes del pickup); detecto que la entrada no es la casilla de map.holes y que en la entrada sin pickup look quedaba null; Claude Code encontro un empate de BFS en las pruebas y que v5 no tenia commit.
+- **Modelo / razonamiento:** <modelo real> / <nivel>
+- **Texto enviado en "What changed, and why?":** <texto del punto d>
+- **Qué observar en 10 partidas:** 
+- **Resultado (contra Timothy / contra el resto):**
+- **Decisión:** mantener / ajustar / revertir
