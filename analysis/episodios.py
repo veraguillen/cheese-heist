@@ -563,7 +563,8 @@ def turnos_raton_de_pierna(p, df_d_pierna):
             # que quedar, por eso el gate es "activo", no "not escondido".
             fila = {
                 "bot": bot, "rival": p["rival"], "archivo": p["archivo"], "version": p["version"],
-                "casa": _casa_sig(p), "hc": p["hc"], "resultado_partida": p["resultado_partida"],
+                "casa": _casa_sig(p), "house_type": p["house_type"], "hc": p["hc"],
+                "resultado_partida": p["resultado_partida"],
                 "turno": turno, "turno_episodio": turno - turno_inicio + 1, "fase": fase,
                 "carrying": int(bool(raton.get("carrying"))),
                 "bajo_mesa": int(p["rows"][raton["y"]][raton["x"]] == "T"),
@@ -799,13 +800,26 @@ def media_ic95(serie):
 # ------------------------------------------------------- §F tasa ajustada
 
 
+def _beta_mom(tasas, etiqueta):
+    """(a, b, aviso) de una Beta por método de momentos, a partir de una
+    Serie con la tasa cruda de cada grupo (la dispersión ENTRE grupos es lo
+    que fija a y b). Con 1 solo grupo o varianza nula no se puede estimar
+    por momentos: se usa un prior débil (a=b=1, uniforme) y se avisa."""
+    v = tasas.var(ddof=1)
+    if len(tasas) < 2 or v == 0 or pd.isna(v):
+        return 1.0, 1.0, f"{etiqueta}: no se pudo estimar (a,b) por momentos (pocos grupos o sin varianza); prior débil a=b=1"
+    m = tasas.mean()
+    comun = m * (1 - m) / v - 1
+    if comun <= 0:
+        return 1.0, 1.0, f"{etiqueta}: varianza entre grupos implausible para Beta; prior débil a=b=1"
+    return m * comun, (1 - m) * comun, None
+
+
 def tasa_ajustada(df_episodios, col_grupo, es_evento):
     """Beta-binomial por método de momentos: a partir de la tasa cruda de
     cada grupo, se estima (a, b) de la Beta que mejor explica la dispersión
     ENTRE grupos, y se devuelve, por grupo, la tasa cruda y la ajustada
-    (eventos+a)/(episodios+a+b). Con 1 solo grupo o varianza nula entre
-    grupos no se puede estimar (a,b) por momentos: se usa un prior débil
-    (a=b=1, uniforme) y se avisa."""
+    (eventos+a)/(episodios+a+b)."""
     g = df_episodios.groupby(col_grupo).agg(
         episodios=("fin", "count"), eventos=("fin", lambda s: es_evento(s).sum()),
     )
@@ -813,21 +827,86 @@ def tasa_ajustada(df_episodios, col_grupo, es_evento):
     if g.empty:
         return g, "sin datos"
     tasas = g["eventos"] / g["episodios"]
-    aviso = None
-    if len(g) < 2 or tasas.var(ddof=1) == 0 or pd.isna(tasas.var(ddof=1)):
-        a, b = 1.0, 1.0
-        aviso = f"{col_grupo}: no se pudo estimar (a,b) por momentos (pocos grupos o sin varianza); prior débil a=b=1"
-    else:
-        m, v = tasas.mean(), tasas.var(ddof=1)
-        comun = m * (1 - m) / v - 1
-        if comun <= 0:
-            a, b = 1.0, 1.0
-            aviso = f"{col_grupo}: varianza entre grupos implausible para Beta; prior débil a=b=1"
-        else:
-            a, b = m * comun, (1 - m) * comun
+    a, b, aviso = _beta_mom(tasas, col_grupo)
     g["tasa_cruda"] = tasas
     g["tasa_ajustada"] = (g["eventos"] + a) / (g["episodios"] + a + b)
     return g, aviso
+
+
+# ------------------------------------------------------ §K3 pPesado por casa
+
+
+def p_pesado_por_casa(df_t_raton):
+    """K3: pPesado = turnos con h=1 (pesado) sobre turnos con queso
+    (carrying=1), por tipo de casa. Mismo método de momentos que
+    tasa_ajustada, pero con turnos en vez de episodios: turnos_con_queso
+    hace de "episodios" y turnos_h1 de "eventos". Devuelve (tabla, aviso, a, b)."""
+    if df_t_raton.empty or "h" not in df_t_raton or "house_type" not in df_t_raton:
+        return pd.DataFrame(), "sin datos", None, None
+    cargando = df_t_raton[df_t_raton["carrying"] == 1]
+    if cargando.empty:
+        return pd.DataFrame(), "sin turnos cargando queso", None, None
+    g = cargando.groupby("house_type").agg(
+        turnos_con_queso=("h", "count"), turnos_h1=("h", lambda s: (s == 1).sum()),
+    )
+    g = g[g["turnos_con_queso"] > 0]
+    if g.empty:
+        return g, "sin datos", None, None
+    tasas = g["turnos_h1"] / g["turnos_con_queso"]
+    a, b, aviso = _beta_mom(tasas, "house_type (pPesado)")
+    g["p_pesado_cruda"] = tasas
+    g["p_pesado_ajustada"] = (g["turnos_h1"] + a) / (g["turnos_con_queso"] + a + b)
+    return g, aviso, a, b
+
+
+# -------------------------------------------- §K1 oportunidades de sprint
+
+
+def oportunidades_sprint(piernas, df_d):
+    """K1: turnos donde mi gato vio al ratón a distancia 2 en línea recta
+    (misma fila o columna) con la casilla del medio libre -- oportunidad de
+    sprint (RULES.md: sprint mueve 2 casillas derecho y revisa las dos que
+    cruza; la casilla del ratón ya es piso porque el ratón está parado ahí,
+    solo hace falta chequear la del medio). Solo piernas donde mi_rol es
+    "cat" (el visto es D|, no existe para el rival)."""
+    filas = []
+    for p in piernas:
+        if p["mi_rol"] != "cat":
+            continue
+        dfp = df_d[df_d["archivo"] == p["archivo"]] if df_d is not None and not df_d.empty else df_d
+        if dfp is None or dfp.empty:
+            continue
+        for t in p["turnos"]:
+            turno = t["turn"]
+            f = _fila_d(dfp, turno)
+            if f is None:
+                continue
+            mo = f.get("mouse")
+            cx_raw, cy_raw = f.get("x"), f.get("y")
+            if not (mo and isinstance(mo, list)) or cx_raw is None or cy_raw is None:
+                continue
+            # x/y vienen de un DataFrame (pandas los sube a float64 por el
+            # NaN de la línea de encabezado); hacen falta como int para
+            # indexar p["rows"].
+            cx, cy = int(cx_raw), int(cy_raw)
+            mx, my = int(mo[0]), int(mo[1])
+            if cx == mx and abs(cy - my) == 2:
+                medio = (cx, (cy + my) // 2)
+            elif cy == my and abs(cx - mx) == 2:
+                medio = ((cx + mx) // 2, cy)
+            else:
+                continue
+            if not is_floor(p["rows"][medio[1]][medio[0]]):
+                continue  # casilla del medio bloqueada: no hay sprint posible
+            eventos_siguientes = [
+                e.get("type") for tt in p["turnos"] if turno < tt["turn"] <= turno + 3
+                for e in (tt.get("events") or [])
+            ]
+            filas.append({
+                "archivo": p["archivo"], "rival": p["rival"], "turno": turno,
+                "captura_en_3": int("caught" in eventos_siguientes),
+            })
+    return pd.DataFrame(filas)
 
 
 # ---------------------------------------------------------- §G criterios v5
@@ -1037,6 +1116,39 @@ def validar_carrera_raton(piernas, df_d):
                     "archivo": p["archivo"], "rival": p["rival"], "turno_pickup": turno,
                     "margen": margen, "resultado": resultado, "p_pesado": p_pesado,
                 })
+    return pd.DataFrame(filas)
+
+
+# ------------------------------------------ §K4 umbrales de margen (SOLTAR)
+
+
+def umbrales_margen(margenes, umbrales=(-6, -4, -2, 0)):
+    """Para cada umbral: qué % de los pickups que terminaron en caught y
+    qué % de los que terminaron en delivered tenían margen por debajo (serían
+    "bloqueados" por una regla "no levantes/soltá si margen < umbral"), y el
+    neto 3*(caught bloqueados) - 3*(delivered bloqueados) por partida.
+
+    Es una COTA OPTIMISTA: asume que cada caught bloqueado se convierte en
+    +3 y cada delivered bloqueado en -3, pero no sabemos qué habría hecho
+    el ratón en lugar de levantar ese queso (podría terminar en otra cosa,
+    buena o mala) -- no es una proyección de resultado real."""
+    caught = margenes[margenes["resultado"] == "caught"]
+    delivered = margenes[margenes["resultado"] == "delivered"]
+    n_partidas = margenes["archivo"].nunique()
+    filas = []
+    for u in umbrales:
+        n_caught_bloq = int((caught["margen"] < u).sum())
+        n_delivered_bloq = int((delivered["margen"] < u).sum())
+        neto = 3 * n_caught_bloq - 3 * n_delivered_bloq
+        filas.append({
+            "umbral": u,
+            "pct_caught_bloqueado": 100 * n_caught_bloq / len(caught) if len(caught) else None,
+            "n_caught_bloqueado": n_caught_bloq, "n_caught": len(caught),
+            "pct_delivered_bloqueado": 100 * n_delivered_bloq / len(delivered) if len(delivered) else None,
+            "n_delivered_bloqueado": n_delivered_bloq, "n_delivered": len(delivered),
+            "neto_total": neto,
+            "neto_por_partida": neto / n_partidas if n_partidas else None,
+        })
     return pd.DataFrame(filas)
 
 
@@ -1286,8 +1398,49 @@ def main(argv=None):
         lineas.append("=== I) VALIDAR LA CARRERA DEL RATÓN (mío) ===")
         margenes = validar_carrera_raton(piernas_ok, df_d)
         if not margenes.empty:
+            # K2: percentiles 10/90 además de media y mediana, en los dos
+            # resultados -- para ver si el margen separa captura de entrega
+            # hace falta comparar la distribución completa, no solo el centro.
             for res, g in margenes.groupby("resultado"):
-                lineas.append(f"margen en pickups que terminaron en {res}: media={g['margen'].mean():.2f} mediana={g['margen'].median():.2f} (n={len(g)})")
+                p10, p90 = g["margen"].quantile(0.10), g["margen"].quantile(0.90)
+                lineas.append(
+                    f"margen en pickups que terminaron en {res}: media={g['margen'].mean():.2f} "
+                    f"mediana={g['margen'].median():.2f} p10={p10:.2f} p90={p90:.2f} (n={len(g)})"
+                )
+
+            # K4: umbrales de margen para un SOLTAR hipotético -- cota
+            # optimista (no sabemos qué habría pasado con el queso en
+            # cambio), ver docstring de umbrales_margen.
+            tabla_umbrales = umbrales_margen(margenes)
+            lineas.append("umbrales de margen (cota optimista, no sabemos qué pasaría en cambio):")
+            for _, fila in tabla_umbrales.iterrows():
+                lineas.append(
+                    f"  margen<{fila['umbral']:.0f}: caught bloqueado {fila['pct_caught_bloqueado']:.0f}% "
+                    f"({int(fila['n_caught_bloqueado'])}/{int(fila['n_caught'])}), delivered bloqueado "
+                    f"{fila['pct_delivered_bloqueado']:.0f}% ({int(fila['n_delivered_bloqueado'])}/{int(fila['n_delivered'])}), "
+                    f"neto={int(fila['neto_total']):+d} ({fila['neto_por_partida']:+.2f}/partida)"
+                )
+
+        lineas.append("")
+        lineas.append("=== K1) OPORTUNIDADES DE SPRINT DEL GATO (mío) ===")
+        sprints = oportunidades_sprint(piernas_ok, df_d)
+        if not sprints.empty:
+            por_partida = sprints.groupby("archivo").size()
+            lineas.append(f"oportunidades: {len(sprints)} en total, {por_partida.mean():.2f} por partida (n={len(por_partida)} partidas)")
+            capturas = sprints["captura_en_3"].sum()
+            lineas.append(f"terminaron en captura en los 3 turnos siguientes: {capturas}/{len(sprints)} ({capturas / len(sprints):.0%})")
+        else:
+            lineas.append("sin oportunidades de sprint detectadas (ratón visto a distancia 2 en línea recta, casilla del medio libre)")
+
+        lineas.append("")
+        lineas.append("=== K3) pPesado POR CASA (beta-binomial) ===")
+        g_pp, aviso_pp, a_pp, b_pp = p_pesado_por_casa(df_t_raton)
+        if aviso_pp:
+            lineas.append(f"  aviso: {aviso_pp}")
+        if not g_pp.empty:
+            tasas_pp = g_pp["p_pesado_cruda"]
+            lineas.append(f"media entre casas={tasas_pp.mean():.3f} varianza={tasas_pp.var(ddof=1):.5f} a={a_pp:.2f} b={b_pp:.2f}")
+            lineas.append(g_pp[["turnos_con_queso", "turnos_h1", "p_pesado_cruda", "p_pesado_ajustada"]].round(3).to_string())
 
     lineas.append("")
     lineas.append("=== TOP 3: dónde pierdo más puntos que el rival en la misma situación ===")
