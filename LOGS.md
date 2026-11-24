@@ -33,7 +33,7 @@ Ejemplo: `D|{"hdr":1,"r":"m","w":21,"hg":15,"hc":3,"ch":2,"en":[[3,1],[10,13],[1
 |---|---|---|
 | `t` | Turno | `57` |
 | `r` | Rol: `m` = ratón, `c` = gato | `"c"` |
-| `md` | Modo elegido este turno (v2 suma `ALEJARSE`) | `"IR_AL_QUESO"` |
+| `md` | Modo elegido este turno (v2 suma `ALEJARSE`; v3 suma `EMBOSCADA`, gato) | `"IR_AL_QUESO"` |
 | `pm` | Modo del turno anterior (`null` en el turno 1) | `"VOLVER"` |
 | `b` | Rebote: patrón A, B, A en los últimos 3 turnos (`1`/`0`) | `0` |
 | `x`, `y` | Posición propia al decidir (antes de moverse) | `13`, `11` |
@@ -55,6 +55,7 @@ Ejemplo: `D|{"hdr":1,"r":"m","w":21,"hg":15,"hc":3,"ch":2,"en":[[3,1],[10,13],[1
 | `cat` | Gato visto: `[x, y, dirección, estamina]`, o `null` | `[16,10,"W",28]` |
 | `cd` | (v2) Distancia por camino real del gato al ratón, o `null` | `4` |
 | `dv` | (v2) Ruta segura distinta de la directa (`1`/`0`), o `null` si no se ve al gato | `1` |
+| `mg` | (v3) Margen del agujero elegido en VOLVER, o `null` si no aplica | `3` |
 
 ## Campos solo del gato
 

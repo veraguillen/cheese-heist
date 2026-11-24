@@ -1,58 +1,72 @@
-# CHANGELOG — Midnight Kitchen bot
+CHANGELOG — Midnight Kitchen bot
+
+> Desde v3: un cambio conceptual por rol. Los roles nunca comparten partida, así que cada cambio se mide en su propia pierna; el Elo no se usa para atribuir.
 
 | Versión | Fecha | Hipótesis | Cambio | Posición antes → después | Decisión |
 |---|---|---|---|---|---|
 | v0 | 23 nov | El bot de ejemplo pasa la verificación y entra a la tabla | Ninguno (starter.js) | — → no subido | No subir; la primera subida será v1 |
-| v1 | 23 nov | Si ambos roles se mueven con BFS hacia un objetivo con prioridad fija, el bot pasa de no jugar a sumar entregas y capturas, y obtengo una línea base medida. | Movimiento BFS por caminos reales con máquina de estados de prioridad fija, en gato y ratón; registro D\| con variables de observación. | — → | pendiente (10 partidas) |
-| v2 | 23 nov | Si el ratón evita las casillas a 2 o menos del gato que ve (por camino real), y se aleja cuando no hay ruta segura, espero que las capturas por partida bajen al menos a la mitad, porque en v1 el 94 % de las capturas ocurrieron con el gato visible antes, casi siempre a 3 casillas o más. | El ratón reacciona al gato que ve: esquiva su zona de peligro (radio 2) y, sin ruta segura, va al agujero o se aleja. Aparte, sin efecto en el juego: registro compacto (LOGS.md). | — → | pendiente (10 partidas) |
+| v1 | 23 nov | Si ambos roles se mueven con BFS hacia un objetivo con prioridad fija, el bot pasa de no jugar a sumar entregas y capturas, y obtengo una línea base medida. | Movimiento BFS por caminos reales con máquina de estados de prioridad fija, en gato y ratón; registro D\| con variables de observación. | — → | Reemplazada por v2 (n = 2 contra Timothy; excepción a la regla de 10 partidas por el tamaño del efecto) |
+| v2 | 23 nov | Si el ratón evita las casillas a 2 o menos del gato que ve (por camino real), y se aleja cuando no hay ruta segura, espero que las capturas por partida bajen al menos a la mitad, porque en v1 el 94 % de las capturas ocurrieron con el gato visible antes, casi siempre a 3 casillas o más. | El ratón reacciona al gato que ve: esquiva su zona de peligro (radio 2) y, sin ruta segura, va al agujero o se aleja. Aparte, sin efecto en el juego: registro compacto (LOGS.md). | — → | Mantener (provisional, n = 3) |
+| v3 | 24 nov. | Ratón: si el ratón con queso vuelve al agujero con más margen sobre el gato visible, en vez de al más cercano, espero que bajen las capturas con queso, porque en v2 el 90 % fueron volviendo, a 1 casilla del agujero. Gato: si el gato espera en la entrada del agujero más cercano al queso, en vez de sobre el queso, espero al menos 1 captura por partida y menos entregas de Timothy, porque en v2 pasó el 98 % del tiempo sobre el queso y vio al ratón en 5 de 1200 turnos. | Un cambio por rol. Ratón (R2): con queso y gato visible, elige el agujero con ruta segura de mayor margen. Gato (G2): EMBOSCADA reemplaza a VIGILAR_QUESO; espera en la entrada del agujero más cercano al queso y, tras un pickup, mantiene la entrada más cercana a ese lugar hasta un delivered, caught o dropped. Registro: campo mg y modo EMBOSCADA. | → | |
+Formato de cada entrada
+vX — fecha
+Hipótesis: Si cambio X, espero que mejore Y porque Z.
+Cambio (uno solo):
+Por qué (qué vi en las repeticiones):
+Decidí yo:
+Sugirió la IA:
+Modelo / razonamiento:
+Texto enviado en "What changed, and why?":
+Qué observar en 5–10 repeticiones:
+Resultado:
+Decisión: mantener / ajustar / revertir
+v0 — 23 nov
+Hipótesis: El bot de ejemplo pasa la verificación y entra a la tabla.
+Cambio: ninguno (starter.js). Commit "v0: unchanged starter bot (baseline)" en GitHub.
+Por qué: tener una línea base para comparar las próximas versiones.
+Decidí yo: no subir v0 a meow.tel. El starter se queda quieto, así que se espera 0 entregas y 0 capturas. Es una predicción basada en las reglas, no una medición. Cada subida afecta el Elo y no hay partidas de práctica, así que no gasto partidas midiendo un resultado predecible. La primera subida será v1.
+Sugirió la IA: presentó las dos opciones (A: subir v0 para obtener una línea base y un turn log; B: saltarla) con sus trade-offs. El costo de B es diseñar v1 sin ver un turn log. Para compensarlo, v1 debe imprimir líneas "D|" y notas debug, para que la primera subida entregue los datos que faltan.
+Resultado: v0 no se subió a meow.tel. Pasó pre-ship en local (0 excepciones, 0 acciones inválidas).
+Decisión: no subir. Primera subida: v1.
+v1 — 23 nov
+Hipótesis: Si ambos roles se mueven con BFS hacia un objetivo con prioridad fija, el bot pasa de no jugar a sumar entregas y capturas, y obtengo una línea base medida.
+Cambio (uno solo): Movimiento BFS por caminos reales con máquina de estados de prioridad fija, en gato y ratón; registro D| con variables de observación.
+Por qué (qué vi en las repeticiones): El starter se quedaba quieto. Sin turn logs, el registro extra sirve para estimar los números ocultos.
+Decidí yo: Un solo concepto; quitar la regla de seguridad de la entrada; sin límite de espera; umbral T <= D; observar rebotes y casos límite; aceptar desempates; registro extra (opción B).
+Sugirió la IA: Opciones y trade-offs; los dos desempates; la fila 5 del ratón; los campos de observación; corrección de dos comentarios.
+Modelo / razonamiento: Claude Sonnet 5.5 (bot base) + Claude Opus 5.5 (registro extra)
+Texto enviado en "What changed, and why?": Both roles now move along real map paths (BFS) toward a goal chosen by a fixed mode priority, because the starter stood still and scored nothing. Each turn also logs its decision and observations, so I can measure the game's hidden numbers.
+Qué observar en 5–10 repeticiones: Entregas, capturas, impuesto, capturas en la entrada y con queso, rebotes y casos límite; primero contra Timothy.
+Resultado: 7 derrotas en 7 partidas. Contra Timothy (2 partidas): marcador 3–91 y 13–79. Mi ratón: 23,5 capturas, 2,5 entregas y 1 de impuesto por partida. Mi gato: 0 capturas (799 de 800 turnos en VIGILAR_QUESO). El 83 % de los puntos de Timothy (141 de 170) vino de capturas de mi ratón; en 44 de 47 el ratón había visto al gato en los 3 turnos anteriores. Las líneas D| (unos 390 caracteres) se cortaban en 300.
+Decisión: reemplazada por v2. Se decidió con 2 partidas contra Timothy, por debajo de la regla de 10, porque el efecto era muy grande (47 capturas) y el patrón muy claro (94 %). Queda registrado como excepción consciente.
+v2 — 23 nov
+Hipótesis: Si el ratón evita las casillas a 2 o menos del gato que ve (por camino real), y se aleja cuando no hay ruta segura, espero que las capturas por partida bajen al menos a la mitad, porque en v1 el 94 % de las capturas ocurrieron con el gato visible antes, casi siempre a 3 casillas o más.
+Cambio (uno solo): El ratón reacciona al gato que ve: esquiva su zona de peligro (radio 2) y, sin ruta segura, va al agujero o se aleja. Aparte, sin efecto en el juego: registro compacto (LOGS.md).
+Por qué (qué vi en las repeticiones): v1 contra Timothy: 83 % de sus puntos vinieron de capturas de mi ratón (47, 23,5 por partida); en 44 de 47 el ratón vio al gato antes. Las líneas D| de v1 (unos 390 caracteres) se cortaban en 300.
+Decidí yo: Atacar las capturas del ratón; opción A (esquivar) frente a retirarse o usar el cascabel; radio 2 por el sprint; sin ruta segura, volver al agujero; registro compacto con leyenda clara (opción A); arreglar dv y el modo ESCONDIDO en el registro.
+Sugirió la IA: Medir VISTO/SOLO_OIDO/SORPRESA antes de programar; la redacción de la hipótesis; alejarse cuando tampoco hay ruta al agujero; criterios (capturas <= 12 por partida y neto mejor que v1); campos cd y dv; los dos arreglos del registro.
+Modelo / razonamiento: Claude Opus 5.5 (Claude Code)
+Texto enviado en "What changed, and why?": The mouse now avoids tiles within 2 steps of a visible cat and backs off when no safe path exists, because in v1 most of its captures (44 of 47) happened after it had already seen the cat. Logs were also shortened so the 300-char limit no longer cuts them.
+Qué observar en 5–10 repeticiones: Capturas por partida de ratón (meta <= 12, base 23,5), entregas, impuesto, turnos en ALEJARSE, desvíos (dv=1), capturas VISTO/SOLO_OIDO; primero contra Timothy.
+Resultado (contra Timothy, 3 partidas: 2 ranch de 8 agujeros y 1 cottage de 4):
+Marcador: 21–39, 21–40, 45–46.
+Mi ratón: 9,67 capturas por partida (6, 9, 14), −59 % frente a v1; 7 entregas por partida (antes 2,5); impuesto 0,67. Neto del ratón: −8,7 (v1: −64).
+Efecto no previsto: las entregas casi se triplicaron (el ratón sobrevive más y hace más viajes).
+Mi gato: 0 capturas. En m3 sumó 24 puntos solo por el impuesto que pagó el ratón de Timothy.
+Esquive: ALEJARSE en el 4–11 % de los turnos del ratón; la ruta segura difirió de la directa en el 62 % de los turnos con gato visible (174 de 279). 0 líneas D| ilegibles en 1203.
+Capturas: 28 de 29 VISTO, 1 SOLO_OIDO, 0 SORPRESA. 22 de 28 con el gato a 1–2 casillas el turno anterior; 2 con cd null (gato visto 2–3 turnos antes). 26 de 29 con queso (v1: 51 %); tasa aproximada por turno: ~6 % en VOLVER frente a ~0,4 % en IR_AL_QUESO (por confirmar con c=1).
+Advertencias: n = 3 (menos que la regla de 10); las casas de v1 y v2 pueden ser de otro tipo (posible mezcla de causas); m3 (cottage) superó la meta con 14 capturas.
+Patrones de fallo por puntos cedidos: (1) capturas volviendo con queso, 78 pts; (2) mi gato no atrapa y Timothy entrega, 36 pts; (3) capturas sin queso o sin memoria, 11 pts.
+Decisión: mantener (provisional, n = 3). Cumple el criterio de §8 en promedio (9,67 ≤ 12 y neto mejor que v1). Se revisa si al juntar más partidas el promedio supera 12.
 
----
-
-## Formato de cada entrada
-
-## vX — fecha
-- **Hipótesis:** Si cambio X, espero que mejore Y porque Z.
-- **Cambio (uno solo):**
-- **Por qué (qué vi en las repeticiones):**
-- **Decidí yo:**
-- **Sugirió la IA:**
-- **Modelo / razonamiento:**
-- **Texto enviado en "What changed, and why?":**
-- **Qué observar en 5–10 repeticiones:**
-- **Resultado:**
-- **Decisión:** mantener / ajustar / revertir
-
----
-
-## v0 — 23 nov
-- **Hipótesis:** El bot de ejemplo pasa la verificación y entra a la tabla.
-- **Cambio:** ninguno (starter.js). Commit "v0: unchanged starter bot (baseline)" en GitHub.
-- **Por qué:** tener una línea base para comparar las próximas versiones.
-- **Decidí yo:** no subir v0 a meow.tel. El starter se queda quieto, así que se espera 0 entregas y 0 capturas. Es una predicción basada en las reglas, no una medición. Cada subida afecta el Elo y no hay partidas de práctica, así que no gasto partidas midiendo un resultado predecible. La primera subida será v1.
-- **Sugirió la IA:** presentó las dos opciones (A: subir v0 para obtener una línea base y un turn log; B: saltarla) con sus trade-offs. El costo de B es diseñar v1 sin ver un turn log. Para compensarlo, v1 debe imprimir líneas "D|" y notas debug, para que la primera subida entregue los datos que faltan.
-- **Resultado:** v0 no se subió a meow.tel. Pasó `pre-ship` en local (0 excepciones, 0 acciones inválidas).
-- **Decisión:** no subir. Primera subida: v1.
-
-## v1 — 23 nov
-- **Hipótesis:** Si ambos roles se mueven con BFS hacia un objetivo con prioridad fija, el bot pasa de no jugar a sumar entregas y capturas, y obtengo una línea base medida.
-- **Cambio (uno solo):** Movimiento BFS por caminos reales con máquina de estados de prioridad fija, en gato y ratón; registro D| con variables de observación.
-- **Por qué (qué vi en las repeticiones):** El starter se quedaba quieto. Sin turn logs, el registro extra sirve para estimar los números ocultos.
-- **Decidí yo:** Un solo concepto; quitar la regla de seguridad de la entrada; sin límite de espera; umbral T <= D; observar rebotes y casos límite; aceptar desempates; registro extra (opción B).
-- **Sugirió la IA:** Opciones y trade-offs; los dos desempates; la fila 5 del ratón; los campos de observación; corrección de dos comentarios.
-- **Modelo / razonamiento:** Claude Sonnet 5.5 (bot base) + Claude Opus 5.5 (registro extra)
-- **Texto enviado en "What changed, and why?":** Both roles now move along real map paths (BFS) toward a goal chosen by a fixed mode priority, because the starter stood still and scored nothing. Each turn also logs its decision and observations, so I can measure the game's hidden numbers.
-- **Qué observar en 5–10 repeticiones:** Entregas, capturas, impuesto, capturas en la entrada y con queso, rebotes y casos límite; primero contra Timothy.
-- **Resultado:**
-- **Decisión:** pendiente (10 partidas)
-
-## v2 — 23 nov
-- **Hipótesis:** Si el ratón evita las casillas a 2 o menos del gato que ve (por camino real), y se aleja cuando no hay ruta segura, espero que las capturas por partida bajen al menos a la mitad, porque en v1 el 94 % de las capturas ocurrieron con el gato visible antes, casi siempre a 3 casillas o más.
-- **Cambio (uno solo):** El ratón reacciona al gato que ve: esquiva su zona de peligro (radio 2) y, sin ruta segura, va al agujero o se aleja. Aparte, sin efecto en el juego: registro compacto (LOGS.md).
-- **Por qué (qué vi en las repeticiones):** v1 contra Timothy: 83 % de sus puntos vinieron de capturas de mi ratón (47, 23,5 por partida); en 44 de 47 el ratón vio al gato antes. Las líneas D| de v1 (unos 390 caracteres) se cortaban en 300.
-- **Decidí yo:** Atacar las capturas del ratón; opción A (esquivar) frente a retirarse o usar el cascabel; radio 2 por el sprint; sin ruta segura, volver al agujero; registro compacto con leyenda clara (opción A); arreglar dv y el modo ESCONDIDO en el registro.
-- **Sugirió la IA:** Medir VISTO/SOLO_OIDO/SORPRESA antes de programar; la redacción de la hipótesis; alejarse cuando tampoco hay ruta al agujero; criterios (capturas <= 12 por partida y neto mejor que v1); campos cd y dv; los dos arreglos del registro.
-- **Modelo / razonamiento:** Claude Opus 5.5 (Claude Code)
-- **Texto enviado en "What changed, and why?":** The mouse now avoids tiles within 2 steps of a visible cat and backs off when no safe path exists, because in v1 most of its captures (44 of 47) happened after it had already seen the cat. Logs were also shortened so the 300-char limit no longer cuts them.
-- **Qué observar en 5–10 repeticiones:** Capturas por partida de ratón (meta <= 12, base 23,5), entregas, impuesto, turnos en ALEJARSE, desvíos (dv=1), capturas VISTO/SOLO_OIDO; primero contra Timothy.
-- **Resultado:**
-- **Decisión:** pendiente (10 partidas)
+## v3 — 24 nov.
+- **Hipótesis:** Ratón: si el ratón con queso vuelve al agujero con más margen sobre el gato visible, en vez de al más cercano, espero que bajen las capturas con queso, porque en v2 el 90 % fueron volviendo, a 1 casilla del agujero. Gato: si el gato espera en la entrada del agujero más cercano al queso, en vez de sobre el queso, espero al menos 1 captura por partida y menos entregas de Timothy, porque en v2 pasó el 98 % del tiempo sobre el queso y vio al ratón en 5 de 1200 turnos.
+- **Cambio (uno solo):** Un cambio por rol. Ratón (R2): con queso y gato visible, elige el agujero con ruta segura de mayor margen. Gato (G2): EMBOSCADA reemplaza a VIGILAR_QUESO; espera en la entrada del agujero más cercano al queso y, tras un pickup, mantiene la entrada más cercana a ese lugar hasta un delivered, caught o dropped. Registro: campo mg y modo EMBOSCADA.
+- **Por qué (qué vi en los datos):** Diagnóstico de v2 contra Timothy (3 partidas): 26 de 29 capturas con queso, mediana de 1 casilla al agujero; el peso se descartó (5 de 26 con h=1, por debajo del ~60 % esperado por azar). Gato: 788 de 800 turnos sobre el queso; las entregas rivales ocurrieron a unas 15 casillas.
+- **Decidí yo:** Pasar a un cambio conceptual por rol. Elegir R2 frente a R5 y G2 frente a G4. Aprobar el criterio de margen, el gato sobre la entrada y los umbrales. Aplicar la corrección del pickup antes de subir. Subir de noche sin arnés de repetición.
+- **Sugirió la IA:** Las opciones R2, R5, G2 y G4; descartar G1 y R1 con los datos; el criterio de margen; detectar el hueco del pickup y el bug de eventos leídos solo en EMBOSCADA; los 7 casos de prueba.
+- **Modelo / razonamiento:** Claude Opus 5.5 (Claude Code) / razonamiento: <COMPLETA>
+- **Texto enviado en "What changed, and why?":** Mouse returns to the safest hole, not the nearest, because most v2 captures happened on the way back. Cat waits at the hole entrance near the cheese and keeps guarding it after a pickup, because it almost never saw the mouse in v2.
+- **Qué observar en 10 partidas:** Contra Timothy, por pierna y por tipo de casa. Ratón: capturas con queso (base 26 en 3 partidas), entregas (base 7, mínimo 5), mg. Gato: capturas (base 0), entregas de Timothy (base 4), turnos en EMBOSCADA, cambios de tg, impuesto cobrado.
+- **Resultado (contra Timothy / contra el resto):**
+- **Decisión:** pendiente
