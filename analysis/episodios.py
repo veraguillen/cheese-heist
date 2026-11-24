@@ -1069,7 +1069,12 @@ def validar_carrera_raton(piernas, df_d):
     """Solo piernas donde mi_rol es "mouse". Por cada pickup: margen =
     cd (D|, gato visto o recordado) a la entrada del agujero más cercano al
     pickup, menos la distancia del ratón a ese mismo agujero sobre
-    (1 - pPesado), con pPesado estimado en esa misma partida."""
+    (1 - pPesado), con pPesado estimado en esa misma partida.
+
+    Si no había gato visto ni recordado (cd null), el pickup se guarda IGUAL
+    (margen=NaN) en vez de descartarse: así se puede contar cuántos quedan
+    afuera de cada grupo (caught/delivered) y decidir si se los incluye o no
+    al mirar los umbrales (quien llama ve el NaN, no se esconde acá)."""
     filas = []
     for p in piernas:
         if p["mi_rol"] != "mouse":
@@ -1096,9 +1101,7 @@ def validar_carrera_raton(piernas, df_d):
                 continue
             f = _fila_d(dfp, turno)
             cd = f.get("cd") if f is not None else None
-            if cd is None:
-                continue
-            margen = cd - (d_raton / (1 - p_pesado))
+            margen = (cd - (d_raton / (1 - p_pesado))) if cd is not None else None
 
             resultado = None
             for tt in p["turnos"]:
@@ -1401,25 +1404,42 @@ def main(argv=None):
             # K2: percentiles 10/90 además de media y mediana, en los dos
             # resultados -- para ver si el margen separa captura de entrega
             # hace falta comparar la distribución completa, no solo el centro.
+            # margen NaN = pickup sin gato visto ni recordado (cd null): se
+            # cuenta aparte, las estadísticas de distribución son sobre los
+            # que sí tienen margen calculado.
             for res, g in margenes.groupby("resultado"):
-                p10, p90 = g["margen"].quantile(0.10), g["margen"].quantile(0.90)
+                validos = g["margen"].dropna()
+                n_nan = int(g["margen"].isna().sum())
+                if validos.empty:
+                    lineas.append(f"margen en pickups que terminaron en {res}: sin margen calculado (sin gato en los {n_nan})")
+                    continue
+                p10, p90 = validos.quantile(0.10), validos.quantile(0.90)
                 lineas.append(
-                    f"margen en pickups que terminaron en {res}: media={g['margen'].mean():.2f} "
-                    f"mediana={g['margen'].median():.2f} p10={p10:.2f} p90={p90:.2f} (n={len(g)})"
+                    f"margen en pickups que terminaron en {res}: media={validos.mean():.2f} "
+                    f"mediana={validos.median():.2f} p10={p10:.2f} p90={p90:.2f} "
+                    f"(n={len(validos)}, sin gato (NaN)={n_nan})"
                 )
 
             # K4: umbrales de margen para un SOLTAR hipotético -- cota
             # optimista (no sabemos qué habría pasado con el queso en
-            # cambio), ver docstring de umbrales_margen.
-            tabla_umbrales = umbrales_margen(margenes)
-            lineas.append("umbrales de margen (cota optimista, no sabemos qué pasaría en cambio):")
-            for _, fila in tabla_umbrales.iterrows():
-                lineas.append(
-                    f"  margen<{fila['umbral']:.0f}: caught bloqueado {fila['pct_caught_bloqueado']:.0f}% "
-                    f"({int(fila['n_caught_bloqueado'])}/{int(fila['n_caught'])}), delivered bloqueado "
-                    f"{fila['pct_delivered_bloqueado']:.0f}% ({int(fila['n_delivered_bloqueado'])}/{int(fila['n_delivered'])}), "
-                    f"neto={int(fila['neto_total']):+d} ({fila['neto_por_partida']:+.2f}/partida)"
-                )
+            # cambio), ver docstring de umbrales_margen. Dos versiones:
+            # (a) solo pickups con margen calculado (como antes) y (b) con
+            # todos -- un pickup sin gato (margen NaN) nunca queda "bloqueado"
+            # (NaN < umbral es falso), pero en (b) sigue contando en el total
+            # de cada grupo, así que el % bloqueado baja frente a (a).
+            def _imprimir_umbrales(tabla):
+                for _, fila in tabla.iterrows():
+                    lineas.append(
+                        f"  margen<{fila['umbral']:.0f}: caught bloqueado {fila['pct_caught_bloqueado']:.0f}% "
+                        f"({int(fila['n_caught_bloqueado'])}/{int(fila['n_caught'])}), delivered bloqueado "
+                        f"{fila['pct_delivered_bloqueado']:.0f}% ({int(fila['n_delivered_bloqueado'])}/{int(fila['n_delivered'])}), "
+                        f"neto={int(fila['neto_total']):+d} ({fila['neto_por_partida']:+.2f}/partida)"
+                    )
+
+            lineas.append("umbrales de margen -- (a) solo pickups con margen calculado (sin los NaN):")
+            _imprimir_umbrales(umbrales_margen(margenes.dropna(subset=["margen"])))
+            lineas.append("umbrales de margen -- (b) todos los pickups (NaN cuenta en el total, nunca bloqueado):")
+            _imprimir_umbrales(umbrales_margen(margenes))
 
         lineas.append("")
         lineas.append("=== K1) OPORTUNIDADES DE SPRINT DEL GATO (mío) ===")
