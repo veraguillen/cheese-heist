@@ -123,62 +123,44 @@ caso('b) ratón con queso sin gato visible -> igual que v2 (agujero más cercano
 });
 
 // ---------------------------------------------------------------- caso c
-caso('c) gato sin ratón ni olor, con un queso -> a la entrada del agujero más cercano AL QUESO; al llegar, STAY', () => {
+caso('c) gato sin ratón ni olor, con un queso -> va AL QUESO y hace STAY sobre él', () => {
   const { createBot, sink } = loadBot();
   const act = createBot({ role: 'cat', map: corridorMap(), rules: RULES });
 
-  // El queso está pegado al agujero 1 (dist 3 desde el queso), bien lejos
-  // del agujero 0 (dist 9 desde el queso) -- aunque el GATO esté más cerca
-  // del agujero 0: así se prueba que el objetivo depende del queso, no del
-  // gato.
+  // El queso está en (8,1): sin pickup ni persecución, el gato vigila el
+  // queso más cercano yendo derecho a su casilla (no a una entrada).
   sink.length = 0;
   const a1 = act(catObs({
     you: { x: 2, y: 1, facing: 'N', stamina: 30 },
     cheese: [[8, 1]],
   }));
   const d1 = lastD(sink);
-  assert(d1.md === 'EMBOSCADA', `esperaba md EMBOSCADA, salió ${d1.md}`);
-  assert(d1.tg === '9,1', `esperaba ir a la entrada (9,1) del agujero más cercano al queso, salió tg=${d1.tg}`);
+  assert(d1.md === 'VIGILAR_QUESO', `esperaba md VIGILAR_QUESO, salió ${d1.md}`);
+  assert(d1.tg === '8,1', `esperaba ir a la casilla del queso (8,1), salió tg=${d1.tg}`);
   assert(a1.move === 'E', `esperaba moverse al Este, salió ${a1.move}`);
 
-  // Al llegar a esa entrada, con el mismo queso en el piso: STAY.
+  // Al llegar a la casilla del queso, con el mismo queso en el piso: STAY.
   sink.length = 0;
   const a2 = act(catObs({
-    you: { x: 9, y: 1, facing: 'E', stamina: 30 },
+    you: { x: 8, y: 1, facing: 'E', stamina: 30 },
     cheese: [[8, 1]],
   }));
   const d2 = lastD(sink);
-  assert(a2.move === 'STAY', `esperaba STAY al llegar a la entrada, salió ${a2.move}`);
-  assert(d2.md === 'EMBOSCADA', `esperaba seguir en EMBOSCADA, salió ${d2.md}`);
+  assert(a2.move === 'STAY', `esperaba STAY al llegar al queso, salió ${a2.move}`);
+  assert(d2.md === 'VIGILAR_QUESO', `esperaba seguir en VIGILAR_QUESO, salió ${d2.md}`);
 });
 
 // ---------------------------------------------------------------- caso d
-caso('d) gato sin queso en el piso, después de haber elegido una entrada -> se queda o vuelve ahí', () => {
+caso('d) gato sin queso en el piso y sin persecución activa -> STAY', () => {
   const { createBot, sink } = loadBot();
   const act = createBot({ role: 'cat', map: corridorMap(), rules: RULES });
 
-  // Turno 1: elige la entrada (9,1) por el queso (igual que en el caso c).
   sink.length = 0;
-  act(catObs({ you: { x: 2, y: 1, facing: 'N', stamina: 30 }, cheese: [[8, 1]] }));
-
-  // Turno 2: el queso ya no está, y el gato sigue en (2,2) (no llegó):
-  // debe seguir yendo hacia la MISMA entrada (9,1), de memoria.
-  sink.length = 0;
-  const vuelve = act(catObs({ you: { x: 2, y: 1, facing: 'N', stamina: 30 }, cheese: [] }));
-  const dVuelve = lastD(sink);
-  assert(dVuelve.tg === '9,1', `esperaba seguir yendo a (9,1) de memoria, salió tg=${dVuelve.tg}`);
-  assert(vuelve.move === 'E', `esperaba moverse al Este hacia la emboscada recordada, salió ${vuelve.move}`);
-
-  // Turno 3: sin queso y ya parado en (9,1): se queda.
-  sink.length = 0;
-  const seQueda = act(catObs({ you: { x: 9, y: 1, facing: 'E', stamina: 30 }, cheese: [] }));
-  assert(seQueda.move === 'STAY', `esperaba quedarse (STAY) en la entrada recordada, salió ${seQueda.move}`);
-
-  // Bot nuevo (sin memoria todavía) y sin queso: STAY liso.
-  const { createBot: createBot2 } = loadBot();
-  const act2 = createBot2({ role: 'cat', map: corridorMap(), rules: RULES });
-  const sinMemoria = act2(catObs({ you: { x: 5, y: 1, facing: 'N', stamina: 30 }, cheese: [] }));
-  assert(sinMemoria.move === 'STAY', `sin emboscada previa y sin queso, esperaba STAY, salió ${sinMemoria.move}`);
+  const a = act(catObs({ you: { x: 5, y: 1, facing: 'N', stamina: 30 }, cheese: [] }));
+  const d = lastD(sink);
+  assert(a.move === 'STAY', `sin queso en el piso, esperaba STAY, salió ${a.move}`);
+  assert(d.md === 'VIGILAR_QUESO', `esperaba md VIGILAR_QUESO, salió ${d.md}`);
+  assert(d.tg === null, `sin queso objetivo, esperaba tg null, salió tg=${d.tg}`);
 });
 
 // ---------------------------------------------------------------- caso e
@@ -186,14 +168,13 @@ caso('e) pickup de un queso -> no abandona esa entrada por otro queso que queda 
   const { createBot, sink } = loadBot();
   const act = createBot({ role: 'cat', map: corridorMap(), rules: RULES });
 
-  // Turno 1: dos quesos, A (2,1) cerca del agujero 0 y B (8,1) cerca del
-  // agujero 1. El más cercano al gato es A, así que elige la entrada (1,1)
-  // (la del agujero 0) -- y ya está parado ahí.
+  // Turno 1: dos quesos, A pegado al gato (1,1) y B lejos (8,1). El más
+  // cercano es A, así que el gato ya está parado sobre él.
   sink.length = 0;
-  const t1 = act(catObs({ you: { x: 1, y: 1, facing: 'N', stamina: 30 }, cheese: [[2, 1], [8, 1]] }));
-  assert(t1.move === 'STAY', `turno 1: esperaba STAY ya en la entrada (1,1), salió ${t1.move}`);
+  const t1 = act(catObs({ you: { x: 1, y: 1, facing: 'N', stamina: 30 }, cheese: [[1, 1], [8, 1]] }));
+  assert(t1.move === 'STAY', `turno 1: esperaba STAY sobre el queso A, salió ${t1.move}`);
 
-  // Turno 2: el ratón levantó A (pickup en (2,1)). Queda B en el piso, cuya
+  // Turno 2: el ratón levantó A (pickup en (1,1)). Queda B en el piso, cuya
   // entrada más cercana es la OTRA (9,1) -- pero el gato no debe ir ahí:
   // tiene que seguir esperando por A, que es el queso que de verdad va a
   // salir por (1,1).
@@ -201,7 +182,7 @@ caso('e) pickup de un queso -> no abandona esa entrada por otro queso que queda 
   const t2 = act(catObs({
     you: { x: 1, y: 1, facing: 'N', stamina: 30 },
     cheese: [[8, 1]],
-    events: [{ type: 'pickup', x: 2, y: 1 }],
+    events: [{ type: 'pickup', x: 1, y: 1 }],
   }));
   const d2 = lastD(sink);
   assert(d2.tg === '1,1', `esperaba seguir apuntando a (1,1) (la entrada de A), salió tg=${d2.tg}`);
@@ -213,7 +194,7 @@ caso('f) delivered -> el gato vuelve a elegir por el queso que queda en el piso'
   const { createBot, sink } = loadBot();
   const act = createBot({ role: 'cat', map: corridorMap(), rules: RULES });
 
-  // Turno 1: un solo queso A (2,1), el gato va a su entrada (1,1).
+  // Turno 1: un solo queso A (2,1), el gato camina hacia él.
   sink.length = 0;
   act(catObs({ you: { x: 1, y: 1, facing: 'N', stamina: 30 }, cheese: [[2, 1]] }));
 
@@ -225,8 +206,8 @@ caso('f) delivered -> el gato vuelve a elegir por el queso que queda en el piso'
     events: [{ type: 'pickup', x: 2, y: 1 }],
   }));
 
-  // Turno 3: A se entregó. Ahora sí importa B (8,1), cuya entrada es la
-  // OTRA punta (9,1): el gato tiene que soltar (1,1) e ir para allá.
+  // Turno 3: A se entregó. Ahora sí importa B (8,1): el gato suelta la
+  // entrada (1,1) y va derecho a la casilla del queso B.
   sink.length = 0;
   const t3 = act(catObs({
     you: { x: 1, y: 1, facing: 'N', stamina: 30 },
@@ -234,8 +215,8 @@ caso('f) delivered -> el gato vuelve a elegir por el queso que queda en el piso'
     events: [{ type: 'delivered', hole: 0 }],
   }));
   const d3 = lastD(sink);
-  assert(d3.tg === '9,1', `esperaba volver a elegir por queso y apuntar a (9,1), salió tg=${d3.tg}`);
-  assert(t3.move === 'E', `esperaba moverse al Este hacia la nueva entrada, salió ${t3.move}`);
+  assert(d3.tg === '8,1', `esperaba volver a elegir por queso y apuntar a la casilla (8,1), salió tg=${d3.tg}`);
+  assert(t3.move === 'E', `esperaba moverse al Este hacia el queso, salió ${t3.move}`);
 });
 
 // ---------------------------------------------------------------- caso g
@@ -243,7 +224,7 @@ caso('g) delivered en un turno con olor (SEGUIR_OLOR) también limpia persecucio
   const { createBot, sink } = loadBot();
   const act = createBot({ role: 'cat', map: corridorMap(), rules: RULES });
 
-  // Turno 1: queso A (2,1), el gato va a su entrada (1,1).
+  // Turno 1: queso A (2,1), el gato camina hacia él.
   act(catObs({ you: { x: 1, y: 1, facing: 'N', stamina: 30 }, cheese: [[2, 1]] }));
 
   // Turno 2: pickup de A -> persecucionQueso = (1,1).
@@ -267,15 +248,15 @@ caso('g) delivered en un turno con olor (SEGUIR_OLOR) también limpia persecucio
   assert(d3.md === 'SEGUIR_OLOR', `turno 3: esperaba SEGUIR_OLOR, salió ${d3.md}`);
   assert(t3.move === 'E', `turno 3: esperaba moverse al Este siguiendo el olor, salió ${t3.move}`);
 
-  // Turno 4: sin olor ni ratón, con un queso B nuevo cuya entrada más
-  // cercana es la OTRA punta (9,1). Si persecucionQueso no se hubiera
-  // limpiado, seguiría apuntando a (1,1) en vez de volver a elegir por B.
+  // Turno 4: sin olor ni ratón, con un queso B nuevo. Si persecucionQueso
+  // no se hubiera limpiado, seguiría apuntando a (1,1) en vez de volver a
+  // vigilar B directamente.
   sink.length = 0;
   const t4 = act(catObs({ you: { x: 1, y: 1, facing: 'N', stamina: 30 }, cheese: [[8, 1]] }));
   const d4 = lastD(sink);
-  assert(d4.md === 'EMBOSCADA', `turno 4: esperaba EMBOSCADA, salió ${d4.md}`);
-  assert(d4.tg === '9,1', `turno 4: esperaba que persecucionQueso estuviera limpio y apuntara a (9,1), salió tg=${d4.tg}`);
-  assert(t4.move === 'E', `turno 4: esperaba moverse al Este hacia (9,1), salió ${t4.move}`);
+  assert(d4.md === 'VIGILAR_QUESO', `turno 4: esperaba VIGILAR_QUESO, salió ${d4.md}`);
+  assert(d4.tg === '8,1', `turno 4: esperaba que persecucionQueso estuviera limpio y apuntara al queso (8,1), salió tg=${d4.tg}`);
+  assert(t4.move === 'E', `turno 4: esperaba moverse al Este hacia (8,1), salió ${t4.move}`);
 });
 
 console.log('');

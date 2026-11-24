@@ -1,10 +1,11 @@
-// Midnight Kitchen — bot v3.
+// Midnight Kitchen — bot v3.1.
 //
 // Un bot, dos roles, prioridad fija por modo (máquina de estados simple).
 // El ratón esquiva al gato que ve y, si vuelve con queso, elige el agujero
 // que le da más ventaja de tiempo sobre el gato (no solo el más cercano).
-// El gato ya no vigila el queso: va a esperar a la entrada del agujero más
-// cercano a ese queso, y recuerda esa entrada si el queso desaparece.
+// El gato vigila el queso más cercano (VIGILAR_QUESO); solo si el ratón
+// levanta un queso, va a esperar en la entrada más cercana a ese pickup
+// (EMBOSCADA), hasta que lo entrega, lo suelta o lo atrapan.
 
 // --------------------------------------------------------------- utilidades
 
@@ -477,7 +478,7 @@ function actualizarMemoriaGato(obs, mouseGraphForCat, entranceByHole, memory) {
   for (const ev of obs.events) {
     if (ev.type === 'pickup') {
       const bfsHole = bfsFirstStep(mouseGraphForCat, keyOf(ev.x, ev.y), (k) => holeSet.has(k));
-      if (bfsHole) memory.persecucionQueso = memory.ultimaEmboscada = entranceByHole[bfsHole.target];
+      if (bfsHole) memory.persecucionQueso = entranceByHole[bfsHole.target];
     } else if (ev.type === 'delivered' || ev.type === 'caught' || ev.type === 'dropped') {
       memory.persecucionQueso = null;
     }
@@ -485,43 +486,25 @@ function actualizarMemoriaGato(obs, mouseGraphForCat, entranceByHole, memory) {
 }
 
 /**
- * EMBOSCADA: en vez de ir al queso, el gato va a esperar a la entrada del
- * agujero más cercano a ese queso (por donde el ratón tiene que salir).
- * `memory.ultimaEmboscada` es la primera memoria que el gato usa para
- * decidir (no solo para el registro): si ahora no hay queso objetivo,
- * vuelve a esperar donde esperó la última vez.
+ * EMBOSCADA: si el ratón ya levantó un queso (memory.persecucionQueso,
+ * actualizada en actualizarMemoriaGato, no acá), el gato va a esperar a la
+ * entrada del agujero más cercano a ese pickup.
  *
- * `memory.persecucionQueso` (actualizada en actualizarMemoriaGato, no acá):
- * si el ratón ya levantó un queso, ese es el que importa; no tiene sentido
- * abandonar esa entrada porque queda OTRO queso en el piso.
+ * Sin eso, VIGILAR_QUESO: vigilar el queso más cercano (igual que v2).
  */
-function decideEmboscada(obs, startKey, catGraph, mouseGraphForCat, entranceByHole, memory) {
+function decideEmboscada(obs, startKey, catGraph, memory) {
   if (memory.persecucionQueso) {
     const bfs = bfsFirstStep(catGraph, startKey, (k) => k === memory.persecucionQueso);
     return moveResultFromBfs('EMBOSCADA', bfs, 'el ratón lleva queso: espero en la entrada más cercana al pickup');
   }
 
-  let entranceKey = null;
-
   if (obs.cheese.length > 0) {
     const cheeseSet = new Set(obs.cheese.map(([x, y]) => keyOf(x, y)));
-    const bfsCheese = bfsFirstStep(catGraph, startKey, (k) => cheeseSet.has(k));
-    if (bfsCheese) {
-      const holeSet = new Set(Object.keys(entranceByHole));
-      const bfsHole = bfsFirstStep(mouseGraphForCat, bfsCheese.target, (k) => holeSet.has(k));
-      if (bfsHole) entranceKey = entranceByHole[bfsHole.target];
-    }
+    const bfs = bfsFirstStep(catGraph, startKey, (k) => cheeseSet.has(k));
+    return moveResultFromBfs('VIGILAR_QUESO', bfs, 'vigilando el queso más cercano');
   }
 
-  if (entranceKey) {
-    memory.ultimaEmboscada = entranceKey;
-  } else {
-    entranceKey = memory.ultimaEmboscada;
-  }
-
-  if (!entranceKey) return stayResult('EMBOSCADA', 'sin queso objetivo y sin emboscada previa: espero');
-  const bfs = bfsFirstStep(catGraph, startKey, (k) => k === entranceKey);
-  return moveResultFromBfs('EMBOSCADA', bfs, 'yendo a la entrada más cercana al queso objetivo');
+  return stayResult('VIGILAR_QUESO', 'sin ratón, olor ni queso: espero');
 }
 
 /** Prioridad fija del gato: PERSEGUIR, SEGUIR_OLOR, EMBOSCADA. */
@@ -546,8 +529,8 @@ function decideCat(obs, graph, mouseGraphForCat, entranceByHole, memory) {
     return moveResultFromBfs('SEGUIR_OLOR', bfs, 'siguiendo la casilla con más olor');
   }
 
-  // 3) EMBOSCADA: sin rastro ni vista, esperar donde el ratón tiene que salir.
-  return decideEmboscada(obs, startKey, graph, mouseGraphForCat, entranceByHole, memory);
+  // 3) EMBOSCADA / VIGILAR_QUESO: sin rastro ni vista, cubrir el queso.
+  return decideEmboscada(obs, startKey, graph, memory);
 }
 
 // ------------------------------------------------------------------ registro
@@ -688,7 +671,7 @@ function createBot(setup) {
     : null;
   // Memoria del gato: sobrevive entre turnos para decidir (no solo para
   // loguear), a diferencia de modeHistory de abajo.
-  const catMemory = role === 'cat' ? { ultimaEmboscada: null, persecucionQueso: null } : null;
+  const catMemory = role === 'cat' ? { persecucionQueso: null } : null;
 
   // Historial de modos: SOLO para el registro (prevMode, bounce), nunca
   // para decidir (DISENO_V1.md §2).
