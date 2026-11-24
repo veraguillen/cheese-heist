@@ -6,8 +6,9 @@ Uso:
     python analysis/leer_logs.py data/v1    # solo una versión
 
 O desde un notebook:
-    from leer_logs import cargar
+    from leer_logs import cargar, cargar_emboscadas
     df = cargar("data")
+    df_emboscadas = cargar_emboscadas("data")  # aparte: líneas "emb", no turnos
 
 Cómo funciona:
 - Cada archivo es un turn log de Meowtel en formato JSONL: la línea 1 es un
@@ -86,11 +87,12 @@ def traducir_claves(dato: dict) -> dict:
     return {CLAVES_A_NOMBRES_COMPLETOS.get(clave, clave): valor for clave, valor in dato.items()}
 
 
-def leer_archivo(ruta: Path) -> list[dict]:
+def leer_archivo(ruta: Path) -> tuple[list[dict], list[dict]]:
     filas = []
+    filas_emboscadas = []
     lineas = ruta.read_text(encoding="utf-8", errors="replace").splitlines()
     if not lineas:
-        return filas
+        return filas, filas_emboscadas
 
     # Línea 1: encabezado del turn log (no es un turno). Si tiene "result" o
     # "rules", los guardamos para pegarlos en cada fila de este archivo.
@@ -125,31 +127,57 @@ def leer_archivo(ruta: Path) -> list[dict]:
                 except json.JSONDecodeError:
                     print(f"  aviso: JSON inválido en {ruta.name}, línea {n}")
                     continue
-                dato = traducir_claves(dato)
                 # El nombre del archivo es <rival>_m<N>_<rol> (por ejemplo
                 # timothy_m1_cat.jsonl): la primera parte es el rival y la
                 # segunda, el número de partida ("m1").
                 partes = ruta.stem.split("_")
-                dato["version"] = ruta.parent.name
-                dato["archivo"] = ruta.name
-                dato["rival"] = partes[0].lower()
-                dato["match"] = partes[1] if len(partes) > 1 else None
+                metadatos = {
+                    "version": ruta.parent.name,
+                    "archivo": ruta.name,
+                    "rival": partes[0].lower(),
+                    "match": partes[1] if len(partes) > 1 else None,
+                }
+                # Línea de emboscada a tiempo (DISENO_V5.md §3, LOGS.md): no
+                # es un turno completo (no tiene "md"), así que va a su
+                # propia lista y no se mezcla con las filas de turno.
+                if "emb" in dato and "md" not in dato:
+                    filas_emboscadas.append({**dato, **metadatos})
+                    continue
+                dato = traducir_claves(dato)
+                dato.update(metadatos)
                 dato["resultado_final"] = resultado_final
                 dato["reglas_casa"] = reglas_casa
                 filas.append(dato)
-    return filas
+    return filas, filas_emboscadas
 
 
-def cargar(carpeta: str = "data") -> pd.DataFrame:
+def _leer_todo(carpeta: str) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Recorre la carpeta una sola vez y separa filas de turno de líneas de
+    emboscada (ver leer_archivo). Uso interno de cargar() y cargar_emboscadas()."""
     base = Path(carpeta)
     archivos = sorted(p for p in base.rglob("*") if p.is_file() and not p.name.startswith("."))
     filas = []
+    filas_emboscadas = []
     for ruta in archivos:
-        filas.extend(leer_archivo(ruta))
+        f, e = leer_archivo(ruta)
+        filas.extend(f)
+        filas_emboscadas.extend(e)
     df = pd.DataFrame(filas)
     if not df.empty:
         df["contra_timothy"] = df["rival"].eq("timothy")
+    return df, pd.DataFrame(filas_emboscadas)
+
+
+def cargar(carpeta: str = "data") -> pd.DataFrame:
+    """Solo filas de turno, igual que antes de las líneas de emboscada (v5)."""
+    df, _ = _leer_todo(carpeta)
     return df
+
+
+def cargar_emboscadas(carpeta: str = "data") -> pd.DataFrame:
+    """Líneas sueltas de emboscada a tiempo (DISENO_V5.md §3, LOGS.md), aparte de cargar()."""
+    _, df_emboscadas = _leer_todo(carpeta)
+    return df_emboscadas
 
 
 def resumen(df: pd.DataFrame) -> pd.DataFrame:
@@ -166,9 +194,12 @@ def resumen(df: pd.DataFrame) -> pd.DataFrame:
 
 if __name__ == "__main__":
     carpeta = sys.argv[1] if len(sys.argv) > 1 else "data"
-    df = cargar(carpeta)
+    df, df_emboscadas = _leer_todo(carpeta)
     if df.empty:
         print(f"No encontré líneas 'D|' en {carpeta}. ¿El bot ya imprime su log (v1 en adelante)?")
     else:
         print(f"{len(df)} turnos de {df['archivo'].nunique()} archivos\n")
         print(resumen(df).to_string())
+    if not df_emboscadas.empty:
+        print(f"\n{len(df_emboscadas)} líneas de emboscada a tiempo\n")
+        print(df_emboscadas.to_string(index=False))
