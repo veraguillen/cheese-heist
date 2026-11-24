@@ -1,18 +1,25 @@
-// Midnight Kitchen — bot v1.
+// Midnight Kitchen — bot v2.
 //
-// Concepto único (DISENO_V1.md §1): moverse con BFS por caminos reales hacia
-// el objetivo del modo activo, en los dos roles. Prioridad fija entre modos
-// (máquina de estados) para evitar que el bot "dude" turno a turno.
-// Sin memoria entre turnos para decidir (eso es v2): cada act() decide de
-// cero a partir de la observación de ese turno. El único estado que
-// sobrevive en el closure es el historial de modos, y existe solo para el
-// registro ("D|"), nunca para decidir (DISENO_V1.md §2).
+// Concepto único de v1 (DISENO_V1.md §1): moverse con BFS por caminos reales
+// hacia el objetivo del modo activo, en los dos roles. Prioridad fija entre
+// modos (máquina de estados) para evitar que el bot "dude" turno a turno.
+// Sin memoria entre turnos para decidir: cada act() decide de cero a partir
+// de la observación de ese turno. El único estado que sobrevive en el
+// closure es el historial de modos, y existe solo para el registro ("D|"),
+// nunca para decidir (DISENO_V1.md §2).
 //
-// Fuera de v1 (DISENO_V1.md §10): cascabel, HUIR, túneles iniciados por
-// nosotros, sprint, look, drop, intercepción, memoria para decidir, regla de
-// seguridad en la entrada. Por eso obs.cat, obs.bell y obs.bellLoud del
-// ratón no se usan para decidir: solo se registran en la línea "D|" para
-// estimar los números ocultos y diseñar v2 con datos reales.
+// Cambio de comportamiento de v2 (DISENO_V2.md §3, el único de esta
+// versión): el ratón reacciona al gato que VE (sin memoria: si obs.cat es
+// null, decide exactamente igual que en v1). Esquiva la "zona de peligro"
+// del gato (§4) con el mismo BFS de siempre, bloqueando esas casillas
+// (§5); si ninguna ruta queda segura, se aleja en vez de arriesgarse. El
+// gato no cambia (DISENO_V2.md §6).
+//
+// Fuera de v1 y v2 (DISENO_V1.md §10, DISENO_V2.md §10): cascabel para
+// decidir, túneles iniciados por nosotros, sprint, look, drop, memoria del
+// gato visto, intercepción, cambios en el gato. Por eso obs.bell y
+// obs.bellLoud del ratón siguen sin usarse para decidir: solo se registran
+// en la línea "D|" para seguir estimando los números ocultos.
 
 // --------------------------------------------------------------- utilidades
 
@@ -105,8 +112,16 @@ function buildMouseGraph(map) {
  * quesos), el BFS corta en el primero que aparece en su orden de
  * exploración; DISENO_V1.md pide "el más cercano" pero no dice cómo
  * desempatar entre objetivos empatados en distancia.
+ *
+ * `blocked` (opcional, DISENO_V2.md §5 "Ruta segura"): un Set de casillas
+ * que no se pueden usar ni como paso intermedio ni como objetivo. Es la
+ * "zona de peligro" vista desde el ratón. Si no se pasa (o es null/undefined,
+ * como en todas las llamadas del gato y las de v1), el comportamiento es
+ * idéntico al de antes: nada queda bloqueado. La casilla de partida nunca se
+ * revisa contra `blocked` (solo se usan vecinos NUEVOS), así que siempre se
+ * permite salir desde donde uno está, tal como pide el diseño.
  */
-function bfsFirstStep(graph, startKey, isTarget) {
+function bfsFirstStep(graph, startKey, isTarget, blocked) {
   if (isTarget(startKey)) return { dir: 'STAY', dist: 0, target: startKey, path: [startKey] };
 
   const visited = new Set([startKey]);
@@ -120,7 +135,7 @@ function bfsFirstStep(graph, startKey, isTarget) {
     if (!neighbors) continue;
     for (const dir of DIRS) {
       const next = neighbors[dir];
-      if (!next || visited.has(next)) continue;
+      if (!next || visited.has(next) || (blocked && blocked.has(next))) continue;
       visited.add(next);
       parent.set(next, { from: cur, dir });
       if (isTarget(next)) { foundKey = next; break; }
@@ -140,6 +155,46 @@ function bfsFirstStep(graph, startKey, isTarget) {
   }
   path.reverse();
   return { dir: firstDir, dist: path.length - 1, target: foundKey, path };
+}
+
+/**
+ * Distancia BFS entre dos casillas de un grafo, o null si no hay camino.
+ * Es una envoltura de `bfsFirstStep` (no duplica el recorrido): se usa para
+ * `cd` (DISENO_V2.md §7) y para medir qué tan lejos queda cada candidato de
+ * ALEJARSE respecto del gato (DISENO_V2.md §5).
+ */
+function distanceBetween(graph, fromKey, toKey) {
+  const result = bfsFirstStep(graph, fromKey, (k) => k === toKey);
+  return result ? result.dist : null;
+}
+
+/**
+ * Zona de peligro (DISENO_V2.md §4): casillas a distancia ≤2 del gato por su
+ * propio grafo (piso puro), incluida la casilla del gato. No reutiliza
+ * `bfsFirstStep` porque ese corta en el PRIMER objetivo encontrado; acá hace
+ * falta TODA la zona dentro del radio, no la casilla más cercana a algo. Los
+ * agujeros nunca aparecen porque `catGraph` ni los tiene como nodos (el gato
+ * no entra a 'H'), así que "los agujeros nunca están en peligro" sale solo.
+ */
+function computeDangerZone(catGraph, catKey) {
+  const zone = new Set([catKey]);
+  let frontier = [catKey];
+  for (let depth = 0; depth < 2; depth++) {
+    const next = [];
+    for (const key of frontier) {
+      const neighbors = catGraph[key];
+      if (!neighbors) continue;
+      for (const dir of DIRS) {
+        const n = neighbors[dir];
+        if (n && !zone.has(n)) {
+          zone.add(n);
+          next.push(n);
+        }
+      }
+    }
+    frontier = next;
+  }
+  return zone;
 }
 
 /** Tiles de depuración a partir de una ruta BFS, recortados a debugMaxTiles. */
@@ -185,48 +240,194 @@ function stayResult(mode, debug) {
 // -------------------------------------------------------------- modo ratón
 
 /**
- * Prioridad fija del ratón (DISENO_V1.md §3, gana la primera que se cumple).
- * Nada de esto mira al gato: no hay HUIR en v1 (riesgo aceptado en §1).
+ * dv (DISENO_V2.md §7): compara la ruta segura ya encontrada contra la ruta
+ * directa que habría tomado v1 para el mismo conjunto de objetivos (mismo
+ * BFS, sin `blocked`). Si la ruta segura existe, la directa también existe
+ * siempre —es un subconjunto de los mismos movimientos—, así que no hace
+ * falta manejar un resultado nulo acá. Solo tiene sentido llamarla cuando se
+ * ve al gato (si no, no hay "ruta directa" distinta que comparar).
  */
-function decideMouse(obs, graph, holeKeys) {
-  const startKey = keyOf(obs.you.x, obs.you.y);
+function deviationBit(graph, startKey, isTarget, safeResult) {
+  const direct = bfsFirstStep(graph, startKey, isTarget);
+  return toBit(direct.dir !== safeResult.dir || direct.target !== safeResult.target);
+}
 
-  // 1) TUNEL: viajando entre agujeros, no se puede hacer nada más.
-  if (obs.you.tunneling !== null) {
-    return stayResult('TUNEL', 'en túnel: no se puede actuar este turno');
+/**
+ * ALEJARSE (DISENO_V2.md §5, última fila): cuando ninguna ruta segura llega
+ * al objetivo, el paso que más aleja del gato. Candidatos: quedarse y cada
+ * vecino en el grafo DEL RATÓN (puede ser un agujero). La distancia de cada
+ * candidato es su distancia real al gato por el grafo DEL GATO:
+ * - un vecino que es agujero nunca aparece en `catGraph` (el gato no entra a
+ *   'H'), así que `distanceBetween` da null ahí → se trata como infinito;
+ * - una casilla a la que el gato no puede llegar por ningún camino también
+ *   da null → mismo trato infinito.
+ * Las dos reglas de "cuenta como infinito" de DISENO_V2.md salen de la misma
+ * cuenta, sin casos especiales. Desempate fijo: N, S, E, W y, al final, STAY
+ * (por eso se itera en ese orden y solo se reemplaza el mejor si es
+ * estrictamente mayor).
+ */
+function alejarseResult(mouseGraph, catGraph, startKey, catKey, debug) {
+  const candidates = DIRS.map((dir) => ({ dir, key: mouseGraph[startKey][dir] }));
+  candidates.push({ dir: 'STAY', key: startKey });
+
+  let bestDir = 'STAY';
+  let bestSafety = -1;
+  for (const candidate of candidates) {
+    if (!candidate.key) continue; // pared en esa dirección
+    const away = distanceBetween(catGraph, catKey, candidate.key);
+    const safety = away === null ? Infinity : away;
+    if (safety > bestSafety) {
+      bestSafety = safety;
+      bestDir = candidate.dir;
+    }
   }
 
-  // 2) VOLVER: con queso encima, ir al agujero más cercano (no tiene que
-  // ser el de salida). Si está heavy, igual mandamos el paso: el servidor
-  // lo descarta, nosotros no decidimos distinto por eso.
-  if (obs.you.carrying) {
-    const holeSet = new Set(holeKeys);
-    const bfs = bfsFirstStep(graph, startKey, (k) => holeSet.has(k));
-    return moveResultFromBfs('VOLVER', bfs, 'volviendo con el queso');
-  }
+  // SUPUESTO: en ALEJARSE no hay un "objetivo" ni una "ruta directa" que
+  // comparar (DISENO_V2.md no lo dice explícitamente), así que se registra
+  // dv:1 siempre: por definición es lo más distinto posible de la ruta
+  // directa de v1, que habría ido hacia el objetivo en vez de huir de él.
+  return {
+    mode: 'ALEJARSE',
+    move: bestDir,
+    debug: `${debug}: paso ${bestDir} (seguridad ${bestSafety === Infinity ? 'infinita' : bestSafety})`,
+    target: null,
+    dist: null,
+    path: null,
+    deviated: 1,
+  };
+}
 
-  // 3) IR_AL_QUESO: hay queso en el piso, se sale a buscarlo sin mirar al
-  // gato (ya no hay regla de seguridad en la entrada). Si justo estamos
-  // parados sobre un agujero (inHole != null), el único vecino de ese nodo
-  // es la entrance, así que el primer paso termina siendo la entrance sin
-  // que tengamos que pedirlo a mano.
-  if (obs.cheese.length > 0) {
-    const cheeseSet = new Set(obs.cheese.map(([x, y]) => keyOf(x, y)));
-    const bfs = bfsFirstStep(graph, startKey, (k) => cheeseSet.has(k));
-    return moveResultFromBfs('IR_AL_QUESO', bfs, 'yendo al queso más cercano');
-  }
-
-  // 4) ESCONDIDO: ya adentro de un agujero y sin queso visible, esperar.
-  if (obs.you.inHole !== null) {
-    return stayResult('ESCONDIDO', 'escondido, sin queso en el piso');
-  }
-
-  // 5) ESCONDIDO (caso raro, confirmado en el diseño y vigilado en los
-  // datos — DISENO_V1.md §3 fila 5): afuera y sin queso, se vuelve al
-  // agujero más cercano.
+/**
+ * Fila 2 de DISENO_V2.md §5: con queso, ruta segura al agujero más cercano.
+ * Sin ruta segura, ALEJARSE.
+ */
+function decideVolver(mouseGraph, catGraph, startKey, holeKeys, dangerZone, catKey) {
   const holeSet = new Set(holeKeys);
-  const bfs = bfsFirstStep(graph, startKey, (k) => holeSet.has(k));
-  return moveResultFromBfs('ESCONDIDO', bfs, 'sin queso y fuera del agujero: vuelvo a esconderme');
+  const isHole = (k) => holeSet.has(k);
+  const safe = bfsFirstStep(mouseGraph, startKey, isHole, dangerZone);
+  // Sin gato visible, el label queda igual al de v1 (nada de "por ruta
+  // segura"): DISENO_V2.md §5 dice que ahí "todo funciona como en v1".
+  const label = catKey ? 'volviendo con el queso por ruta segura' : 'volviendo con el queso';
+  if (safe) {
+    const result = moveResultFromBfs('VOLVER', safe, label);
+    result.deviated = catKey ? deviationBit(mouseGraph, startKey, isHole, safe) : null;
+    return result;
+  }
+  if (!catKey) return moveResultFromBfs('VOLVER', null, label);
+  return alejarseResult(mouseGraph, catGraph, startKey, catKey, 'sin ruta segura al agujero: me alejo del gato');
+}
+
+/**
+ * Fila 3 de DISENO_V2.md §5: ruta segura al queso más cercano; si no hay,
+ * ruta segura al agujero más cercano (el modo pasa a ser VOLVER, como pide
+ * el diseño). Si tampoco hay eso, ALEJARSE.
+ */
+function decideIrAlQueso(mouseGraph, catGraph, startKey, cheese, holeKeys, dangerZone, catKey) {
+  const cheeseSet = new Set(cheese.map(([x, y]) => keyOf(x, y)));
+  const isCheese = (k) => cheeseSet.has(k);
+  const safeCheese = bfsFirstStep(mouseGraph, startKey, isCheese, dangerZone);
+  // Mismo criterio que en decideVolver: sin gato, label igual al de v1.
+  const cheeseLabel = catKey ? 'yendo al queso más cercano por ruta segura' : 'yendo al queso más cercano';
+  if (safeCheese) {
+    const result = moveResultFromBfs('IR_AL_QUESO', safeCheese, cheeseLabel);
+    result.deviated = catKey ? deviationBit(mouseGraph, startKey, isCheese, safeCheese) : null;
+    return result;
+  }
+
+  // Sin gato visible, v1 no tenía ningún fallback en este modo: se queda en
+  // el STAY/"sin camino al objetivo" de siempre, igual que v1 (DISENO_V2.md
+  // §5: "si el gato no se ve... todo funciona como en v1"). El fallback al
+  // agujero de abajo es, por construcción, solo para cuando SÍ hay zona de
+  // peligro que esquivar.
+  if (!catKey) return moveResultFromBfs('IR_AL_QUESO', null, cheeseLabel);
+
+  const holeSet = new Set(holeKeys);
+  const isHole = (k) => holeSet.has(k);
+  const safeHole = bfsFirstStep(mouseGraph, startKey, isHole, dangerZone);
+  if (safeHole) {
+    // dv = 1 siempre en este tramo (DISENO_V2.md §7): v1 habría ido al queso
+    // y aquí el objetivo pasó a ser un agujero, así que la ruta ya es
+    // distinta de la directa de v1. Compararla contra "ir al agujero" daría
+    // 0 aunque el ratón sí se desvió.
+    if (safeHole.dir === 'STAY') {
+      // Ya está dentro de un agujero y la entrada está en peligro: se queda.
+      // La acción es la misma (STAY); solo se registra como ESCONDIDO y no
+      // como VOLVER, porque no lleva queso y no está "volviendo" a ningún
+      // lado (claridad del registro, DISENO_V2.md §5 nota bajo la tabla).
+      const stay = stayResult('ESCONDIDO', 'hay queso, pero la entrada está en peligro: me quedo adentro');
+      stay.deviated = 1;
+      return stay;
+    }
+    const result = moveResultFromBfs('VOLVER', safeHole, 'sin ruta segura al queso: vuelvo al agujero más cercano');
+    result.deviated = 1;
+    return result;
+  }
+
+  return alejarseResult(mouseGraph, catGraph, startKey, catKey, 'sin ruta segura al queso ni al agujero: me alejo del gato');
+}
+
+/**
+ * Fila 5 de DISENO_V2.md §5 (caso raro de v1): fuera del agujero y sin
+ * queso en el piso, ruta segura al agujero más cercano. Sin ruta segura,
+ * ALEJARSE.
+ */
+function decideEscondidoFuera(mouseGraph, catGraph, startKey, holeKeys, dangerZone, catKey) {
+  const holeSet = new Set(holeKeys);
+  const isHole = (k) => holeSet.has(k);
+  const safe = bfsFirstStep(mouseGraph, startKey, isHole, dangerZone);
+  const label = catKey
+    ? 'sin queso y fuera del agujero: vuelvo a esconderme por ruta segura'
+    : 'sin queso y fuera del agujero: vuelvo a esconderme';
+  if (safe) {
+    const result = moveResultFromBfs('ESCONDIDO', safe, label);
+    result.deviated = catKey ? deviationBit(mouseGraph, startKey, isHole, safe) : null;
+    return result;
+  }
+  if (!catKey) return moveResultFromBfs('ESCONDIDO', null, label);
+  return alejarseResult(mouseGraph, catGraph, startKey, catKey, 'sin ruta segura al agujero: me alejo del gato');
+}
+
+/**
+ * Prioridad fija del ratón (DISENO_V1.md §3, con los cambios de
+ * DISENO_V2.md §5 en negrita en el propio documento). El gato no cambia
+ * (DISENO_V2.md §3): si `obs.cat` es null, `dangerZone` queda `null`,
+ * `bfsFirstStep` no bloquea nada y el ratón decide exactamente igual que en
+ * v1 — por eso las filas 1 y 4 (TUNEL y ESCONDIDO ya adentro) ni se tocan,
+ * y por eso tampoco se puede llegar a ALEJARSE sin ver al gato.
+ */
+function decideMouse(obs, mouseGraph, holeKeys, catGraph) {
+  const startKey = keyOf(obs.you.x, obs.you.y);
+  const catKey = obs.cat ? keyOf(obs.cat.x, obs.cat.y) : null;
+
+  // cd (DISENO_V2.md §7): pura observación, se calcula siempre que se vea
+  // al gato, sin importar en qué modo termine el turno.
+  const catDist = catKey ? distanceBetween(catGraph, catKey, startKey) : null;
+
+  // Zona de peligro (DISENO_V2.md §4): solo existe con el gato a la vista.
+  const dangerZone = catKey ? computeDangerZone(catGraph, catKey) : null;
+
+  let result;
+  if (obs.you.tunneling !== null) {
+    // 1) TUNEL: sin cambios respecto de v1.
+    result = stayResult('TUNEL', 'en túnel: no se puede actuar este turno');
+  } else if (obs.you.carrying) {
+    // 2) VOLVER.
+    result = decideVolver(mouseGraph, catGraph, startKey, holeKeys, dangerZone, catKey);
+  } else if (obs.cheese.length > 0) {
+    // 3) IR_AL_QUESO.
+    result = decideIrAlQueso(mouseGraph, catGraph, startKey, obs.cheese, holeKeys, dangerZone, catKey);
+  } else if (obs.you.inHole !== null) {
+    // 4) ESCONDIDO: sin cambios. "No se activa ALEJARSE estando dentro de
+    // un agujero" (DISENO_V2.md §5, nota bajo la tabla).
+    result = stayResult('ESCONDIDO', 'escondido, sin queso en el piso');
+  } else {
+    // 5) ESCONDIDO (caso raro).
+    result = decideEscondidoFuera(mouseGraph, catGraph, startKey, holeKeys, dangerZone, catKey);
+  }
+
+  result.catDist = catDist;
+  if (result.deviated === undefined) result.deviated = null;
+  return result;
 }
 
 // --------------------------------------------------------------- modo gato
@@ -333,13 +534,17 @@ function toBit(value) {
  *   ratón    → c=lleva queso(1/0)  h=heavy(1/0)  ih=num. de agujero o null
  *              bl=cascabel o null  bL=cascabel fuerte(1/0)
  *              cat=gato visto [x,y,dirección,estamina] o null
+ *              cd=(v2) distancia real del gato al ratón, o null
+ *              dv=(v2) 1 si la ruta segura difiere de la directa de v1,
+ *                 0 si es igual, null si no se ve al gato (DISENO_V2.md §7)
  *   gato     → st=estamina  f=dirección  sc=casillas con olor
  *              sm=olor más fuerte (0..1) o null
  *              mo=ratón visto [x,y,llevaQueso(1/0)] o null
  * `tunneling` no tiene clave propia: su único rastro en el registro es
- * "md":"TUNEL" (ver decideMouse); no hace falta repetirlo acá.
+ * "md":"TUNEL" (ver decideMouse); no hace falta repetirlo acá. `md` también
+ * puede valer "ALEJARSE" desde v2 (DISENO_V2.md §5).
  */
-function buildLogFields(obs, role, mode, prevMode, bounce, target, dist) {
+function buildLogFields(obs, role, mode, prevMode, bounce, target, dist, catDist, deviated) {
   const isMouse = role === 'mouse';
   const common = {
     t: obs.turn,
@@ -363,6 +568,8 @@ function buildLogFields(obs, role, mode, prevMode, bounce, target, dist) {
         bl: obs.bell === undefined ? null : obs.bell,
         bL: toBit(obs.bellLoud),
         cat: obs.cat ? [obs.cat.x, obs.cat.y, obs.cat.facing, obs.cat.stamina] : null,
+        cd: catDist === undefined ? null : catDist,
+        dv: deviated === undefined ? null : deviated,
       }
     : {
         st: obs.you.stamina,
@@ -399,9 +606,13 @@ function createBot(setup) {
 
   // Todo lo que no cambia turno a turno se precalcula una sola vez acá:
   // el grafo de movimiento y, para el ratón, la lista de agujeros como
-  // claves listas para usar en los Set de objetivo.
+  // claves listas para usar en los Set de objetivo. Desde v2, el ratón
+  // también precalcula el grafo DEL GATO (piso puro): lo necesita la zona
+  // de peligro, `cd` y ALEJARSE (DISENO_V2.md §4 y §5), y es literalmente
+  // `buildFloorGraph`, el mismo que usa el gato para moverse.
   const graph = role === 'cat' ? buildFloorGraph(map) : buildMouseGraph(map);
   const holeKeys = role === 'mouse' ? map.holes.map((h) => keyOf(h.x, h.y)) : null;
+  const catGraph = role === 'mouse' ? buildFloorGraph(map) : null;
 
   // Historial de modos: SOLO para el registro (prevMode, bounce), nunca
   // para decidir (DISENO_V1.md §2).
@@ -410,14 +621,17 @@ function createBot(setup) {
   return function act(obs) {
     if (obs.turn === 1) logEntrances(map, obs, role);
 
-    const decision = role === 'cat' ? decideCat(obs, graph) : decideMouse(obs, graph, holeKeys);
+    const decision = role === 'cat' ? decideCat(obs, graph) : decideMouse(obs, graph, holeKeys, catGraph);
 
     const prevMode = modeHistory.length ? modeHistory[modeHistory.length - 1] : null;
     modeHistory.push(decision.mode);
     if (modeHistory.length > 3) modeHistory.shift();
     const bounce = detectBounce(modeHistory);
 
-    const logLine = buildLogFields(obs, role, decision.mode, prevMode, bounce, decision.target, decision.dist);
+    const logLine = buildLogFields(
+      obs, role, decision.mode, prevMode, bounce, decision.target, decision.dist,
+      decision.catDist, decision.deviated,
+    );
     console.log('D|' + JSON.stringify(logLine));
 
     const action = { move: decision.move, debug: clampText(decision.debug, rules.debugMaxChars) };
