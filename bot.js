@@ -1,8 +1,8 @@
-// Midnight Kitchen — bot v8.
+// Midnight Kitchen — bot v9.
 //
-// Ratón: sin cambios desde v7 (atrapado en su agujero, cambia por túnel).
-// Gato: con 2 o más quesos en el piso y sin información, en vez de
-// quedarse quieto sobre uno solo, ronda entre todos (ver decideRonda).
+// Ratón: con el gato efectivo, descarta los quesos desde los que ya pierde
+// la carrera de vuelta al agujero, antes de ir a levantarlos (ver R-B).
+// Gato: sin cambios desde v7 (sprint para rematar en PERSEGUIR).
 
 // --------------------------------------------------------------- utilidades
 
@@ -149,6 +149,29 @@ function bfsFirstStep(graph, startKey, isTarget, blocked) {
 function distanceBetween(graph, fromKey, toKey) {
   const result = bfsFirstStep(graph, fromKey, (k) => k === toKey);
   return result ? result.dist : null;
+}
+
+/**
+ * BFS completo desde startKey: distancia a TODAS las casillas alcanzables
+ * (DISENO_V9.md). Los agujeros no se mueven, así que esto se calcula una
+ * sola vez por agujero en createBot, no por turno.
+ */
+function bfsMapaDistancias(graph, startKey) {
+  const dist = { [startKey]: 0 };
+  const queue = [startKey];
+  for (let i = 0; i < queue.length; i++) {
+    const cur = queue[i];
+    const neighbors = graph[cur];
+    if (!neighbors) continue;
+    for (const dir of DIRS) {
+      const next = neighbors[dir];
+      if (next && !(next in dist)) {
+        dist[next] = dist[cur] + 1;
+        queue.push(next);
+      }
+    }
+  }
+  return dist;
 }
 
 /**
@@ -358,19 +381,72 @@ function elegirQuesoObjetivo(mouseGraph, startKey, cheeseSet, dangerZone, memory
   return bfs;
 }
 
+/** Fracción de turnos con queso que el ratón pasa pesado (DISENO_V9.md, logs de v5+v6: 0,25 a 0,29 en todas las casas). */
+const P_PESADO = 0.27;
+/** Margen de carrera bajo el cual el gato ya le gana al ratón la carrera al agujero (DISENO_V9.md, logs de v5+v6). */
+const UMBRAL_CARRERA = -4;
+
+/**
+ * Margen de carrera de un queso (R-B, DISENO_V9.md): el mejor caso entre
+ * todos los agujeros de (distancia del gato a la entrada) menos (distancia
+ * del queso a ese agujero, dividida por 1-P_PESADO porque un ratón cargado
+ * camina más lento en promedio). Si el gato no llega a una entrada, ese
+ * agujero no lo hace perder la carrera (cuenta como distancia infinita).
+ */
+function margenCarrera(quesoKey, catDistMap, holeEntranceKeys, distDesdeAgujero) {
+  let mejor = -Infinity;
+  for (let i = 0; i < holeEntranceKeys.length; i++) {
+    const dQueso = distDesdeAgujero[i][quesoKey];
+    if (dQueso === undefined) continue; // el queso no es alcanzable desde ese agujero
+    const dGatoRaw = catDistMap[holeEntranceKeys[i]];
+    const dGato = dGatoRaw === undefined ? Infinity : dGatoRaw;
+    const margen = dGato - dQueso / (1 - P_PESADO);
+    if (margen > mejor) mejor = margen;
+  }
+  return mejor;
+}
+
+/**
+ * R-B (DISENO_V9.md): descarta los quesos desde los que el gato ya gana la
+ * carrera al agujero (margen < UMBRAL_CARRERA para TODOS los agujeros).
+ * Solo tiene sentido llamarla con gato efectivo (sin gato no hay carrera
+ * que perder).
+ */
+function filtrarQuesosPorCarrera(cheeseKeys, catKey, catGraph, holeEntranceKeys, distDesdeAgujero) {
+  const catDistMap = bfsMapaDistancias(catGraph, catKey);
+  const permitidos = new Set();
+  let descartados = 0;
+  for (const c of cheeseKeys) {
+    if (margenCarrera(c, catDistMap, holeEntranceKeys, distDesdeAgujero) < UMBRAL_CARRERA) descartados++;
+    else permitidos.add(c);
+  }
+  return { permitidos, descartados };
+}
+
 /**
  * Fila 3 de DISENO_V2.md §5: ruta segura al queso elegido (DISENO_V5.md #2);
  * si no hay, ruta segura al agujero más cercano (el modo pasa a ser VOLVER,
  * como pide el diseño). Si tampoco hay eso, ALEJARSE.
  */
-function decideIrAlQueso(mouseGraph, catGraph, startKey, cheese, holeKeys, dangerZone, catKey, memory, turn) {
+function decideIrAlQueso(mouseGraph, catGraph, startKey, cheese, holeKeys, holeEntranceKeys, distDesdeAgujero, dangerZone, catKey, memory, turn) {
   const cheeseKeysRaw = cheese.map(([x, y]) => keyOf(x, y));
   // DISENO_V5.md #1b: se suelta para escapar liviano; volver por él con el
   // gato cerca anularía el escape, así que no cuenta como candidato mientras
   // haya un gato efectivo (visto o recordado).
   const ignoraSoltado = Boolean(catKey) && Boolean(memory.quesoSoltado) && cheeseKeysRaw.includes(memory.quesoSoltado);
-  const cheeseKeys = ignoraSoltado ? cheeseKeysRaw.filter((k) => k !== memory.quesoSoltado) : cheeseKeysRaw;
+  let cheeseKeys = ignoraSoltado ? cheeseKeysRaw.filter((k) => k !== memory.quesoSoltado) : cheeseKeysRaw;
   if (ignoraSoltado && memory.objetivoQueso === memory.quesoSoltado) memory.objetivoQueso = null;
+
+  // R-B (DISENO_V9.md): con gato efectivo, descartar los quesos que ya
+  // tiene perdidos en la carrera al agujero -- levantarlos es levantar una
+  // captura casi segura.
+  let rb = 0;
+  if (catKey) {
+    const { permitidos, descartados } = filtrarQuesosPorCarrera(cheeseKeys, catKey, catGraph, holeEntranceKeys, distDesdeAgujero);
+    if (memory.objetivoQueso && !permitidos.has(memory.objetivoQueso)) memory.objetivoQueso = null;
+    cheeseKeys = cheeseKeys.filter((k) => permitidos.has(k));
+    rb = descartados;
+  }
 
   const cheeseSet = new Set(cheeseKeys);
   const isCheese = (k) => cheeseSet.has(k);
@@ -429,6 +505,7 @@ function decideIrAlQueso(mouseGraph, catGraph, startKey, cheese, holeKeys, dange
     }
   }
   result.qs = toBit(ignoraSoltado);
+  result.rb = rb;
   return result;
 }
 
@@ -514,7 +591,7 @@ function agujeroAlternativo(mouseGraph, holeKeys, isCheese, dangerZone, actual, 
  * ESCONDIDO ya adentro) ni se tocan, y por eso tampoco se puede llegar a
  * ALEJARSE o SOLTAR sin un gato efectivo.
  */
-function decideMouse(obs, mouseGraph, holeKeys, catGraph, holeEntranceKeys, memory) {
+function decideMouse(obs, mouseGraph, holeKeys, catGraph, holeEntranceKeys, distDesdeAgujero, memory) {
   const startKey = keyOf(obs.you.x, obs.you.y);
   recordarGatoVisto(obs, memory);
   const { key: catKey, gm } = gatoEfectivo(obs, memory);
@@ -538,7 +615,7 @@ function decideMouse(obs, mouseGraph, holeKeys, catGraph, holeEntranceKeys, memo
     result = decideVolver(mouseGraph, catGraph, startKey, holeKeys, holeEntranceKeys, dangerZone, catKey, catDist, memory);
   } else if (obs.cheese.length > 0) {
     // 3) IR_AL_QUESO.
-    result = decideIrAlQueso(mouseGraph, catGraph, startKey, obs.cheese, holeKeys, dangerZone, catKey, memory, obs.turn);
+    result = decideIrAlQueso(mouseGraph, catGraph, startKey, obs.cheese, holeKeys, holeEntranceKeys, distDesdeAgujero, dangerZone, catKey, memory, obs.turn);
   } else if (obs.you.inHole !== null) {
     // 4) ESCONDIDO: sin cambios. "No se activa ALEJARSE estando dentro de
     // un agujero" (DISENO_V2.md §5, nota bajo la tabla).
@@ -553,6 +630,7 @@ function decideMouse(obs, mouseGraph, holeKeys, catGraph, holeEntranceKeys, memo
   if (result.deviated === undefined) result.deviated = null;
   if (result.margin === undefined) result.margin = null; // mg solo aplica cuando R2 elige agujero
   if (result.qs === undefined) result.qs = 0; // qs solo se calcula en IR_AL_QUESO
+  if (result.rb === undefined) result.rb = 0; // rb (v9) solo se calcula en IR_AL_QUESO
   return result;
 }
 
@@ -626,59 +704,11 @@ function recordarPosicionPropia(startKey, memory) {
 }
 
 /**
- * RONDA (v8): el queso alcanzable con la visita más antigua (nunca visitado
- * cuenta como el más antiguo de todos). Desempate: el más cercano por BFS;
- * si sigue el empate, el primero en el orden de obs.cheese (sale solo: solo
- * se reemplaza con una mejora estricta). Null si ninguno es alcanzable.
- */
-function elegirQuesoRonda(obs, catGraph, startKey, memory) {
-  let mejor = null;
-  for (const [x, y] of obs.cheese) {
-    const key = keyOf(x, y);
-    const dist = distanceBetween(catGraph, startKey, key);
-    if (dist === null) continue; // no alcanzable
-    const visita = memory.visitas.has(key) ? memory.visitas.get(key) : -Infinity;
-    if (!mejor || visita < mejor.visita || (visita === mejor.visita && dist < mejor.dist)) {
-      mejor = { key, dist, visita };
-    }
-  }
-  return mejor ? mejor.key : null;
-}
-
-/**
- * RONDA (v8): con 2 o más quesos, en vez de vigilar uno quieto, recorrerlos
- * (evidencia: el ratón rival rodea al gato quieto y levanta otro queso que
- * nadie vigila). Compromiso: mientras el objetivo siga en el piso, seguir
- * yendo ahí aunque otro quede más cerca -- si no, nunca llegaría a ninguno
- * con el gato recalculando "el más cercano" cada turno.
- */
-function decideRonda(obs, startKey, catGraph, memory) {
-  const cheeseKeys = new Set(obs.cheese.map(([x, y]) => keyOf(x, y)));
-  if (!memory.rondaObjetivo || !cheeseKeys.has(memory.rondaObjetivo)) {
-    memory.rondaObjetivo = elegirQuesoRonda(obs, catGraph, startKey, memory);
-  }
-  if (!memory.rondaObjetivo) {
-    return stayResult('RONDA', 'ningún queso alcanzable: espero');
-  }
-  const bfs = bfsFirstStep(catGraph, startKey, (k) => k === memory.rondaObjetivo);
-  const result = moveResultFromBfs('RONDA', bfs, 'rondando entre los quesos: voy al de visita más antigua');
-  if (bfs && bfs.dir === 'STAY') {
-    // Llegué: registro la visita y suelto el objetivo para que el turno
-    // que viene elija el próximo (el queso sigue en el piso, así que la
-    // regla de "ya no está en obs.cheese" no alcanza para forzar el cambio).
-    memory.visitas.set(memory.rondaObjetivo, obs.turn);
-    memory.rondaObjetivo = null;
-  }
-  return result;
-}
-
-/**
  * EMBOSCADA: si el ratón ya levantó un queso (memory.persecucionQueso,
  * actualizada en actualizarMemoriaGato, no acá), el gato va a esperar a la
  * entrada del agujero más cercano a ese pickup.
  *
- * Sin eso, con 1 solo queso: VIGILAR_QUESO (igual que v2). Con 2 o más:
- * RONDA (v8) -- vigilar uno quieto deja el resto sin cubrir.
+ * Sin eso, VIGILAR_QUESO: vigilar el queso más cercano (igual que v2).
  */
 function decideEmboscada(obs, startKey, catGraph, memory) {
   if (memory.persecucionQueso) {
@@ -686,11 +716,7 @@ function decideEmboscada(obs, startKey, catGraph, memory) {
     return moveResultFromBfs('EMBOSCADA', bfs, 'el ratón lleva queso: espero en la entrada más cercana al pickup');
   }
 
-  if (obs.cheese.length >= 2) {
-    return decideRonda(obs, startKey, catGraph, memory);
-  }
-
-  if (obs.cheese.length === 1) {
+  if (obs.cheese.length > 0) {
     const cheeseSet = new Set(obs.cheese.map(([x, y]) => keyOf(x, y)));
     const bfs = bfsFirstStep(catGraph, startKey, (k) => cheeseSet.has(k));
     return moveResultFromBfs('VIGILAR_QUESO', bfs, 'vigilando el queso más cercano');
@@ -750,9 +776,7 @@ function elegirLook(obs, startKey, result, catGraph, mouseGraphForCat, holeTileK
     // donde vuelve el ratón, no hacia el agujero que tiene al lado.
     return primerPasoHacia(catGraph, startKey, memory.pickupKey);
   }
-  // v8: RONDA mira igual que VIGILAR_QUESO (hacia la entrada más cercana al
-  // queso que acaba de alcanzar, result.target). Nunca en PERSEGUIR/SEGUIR_OLOR.
-  if (result.mode !== 'VIGILAR_QUESO' && result.mode !== 'RONDA') return null;
+  if (result.mode !== 'VIGILAR_QUESO') return null; // nunca en PERSEGUIR/SEGUIR_OLOR.
 
   if (obs.cheese.length === 0) return giroLook(memory); // D3: sin nada que vigilar.
 
@@ -910,7 +934,7 @@ function toBit(value) {
  * puede valer "ALEJARSE" desde v2 (DISENO_V2.md §5), "EMBOSCADA" desde v3 o
  * "SOLTAR" desde v5 (DISENO_V5.md §1).
  */
-function buildLogFields(obs, role, mode, prevMode, bounce, target, dist, catDist, deviated, margin, gatoRecordado, quesoIgnorado, look, sprintPedido) {
+function buildLogFields(obs, role, mode, prevMode, bounce, target, dist, catDist, deviated, margin, gatoRecordado, quesoIgnorado, look, sprintPedido, quesosDescartados) {
   const isMouse = role === 'mouse';
   const common = {
     t: obs.turn,
@@ -939,6 +963,9 @@ function buildLogFields(obs, role, mode, prevMode, bounce, target, dist, catDist
         mg: margin === undefined ? null : margin,
         gm: gatoRecordado === undefined ? null : gatoRecordado,
         qs: quesoIgnorado === undefined ? 0 : quesoIgnorado,
+        // rb (v9): solo se agrega la clave cuando se descartó al menos un
+        // queso por la carrera -- su ausencia ya dice "0" (LOGS.md).
+        ...(quesosDescartados > 0 ? { rb: quesosDescartados } : {}),
       }
     : {
         st: obs.you.stamina,
@@ -987,6 +1014,9 @@ function createBot(setup) {
   const holeKeys = role === 'mouse' ? map.holes.map((h) => keyOf(h.x, h.y)) : null;
   const holeEntranceKeys = role === 'mouse' ? map.holes.map((h) => keyOf(h.entrance.x, h.entrance.y)) : null;
   const catGraph = role === 'mouse' ? buildFloorGraph(map) : null;
+  // R-B (v9): distancia desde cada agujero a cualquier casilla, una sola
+  // vez (los agujeros no se mueven) en vez de un BFS por queso y por turno.
+  const distDesdeAgujero = role === 'mouse' ? holeKeys.map((hk) => bfsMapaDistancias(graph, hk)) : null;
 
   // G2 necesita, desde el gato, el grafo del ratón (para ubicar el agujero
   // más cercano al queso) y la entrada de cada agujero (a dónde ir).
@@ -1000,11 +1030,8 @@ function createBot(setup) {
   // Memoria del gato: sobrevive entre turnos para decidir (no solo para
   // loguear), a diferencia de modeHistory de abajo. `posiciones` es
   // DISENO_V5.md #4 (últimas 6, para no volver sobre olor viejo); `pickupKey`
-  // y `giro` son de v6 (mirar hacia la amenaza); `visitas` y `rondaObjetivo`
-  // son de v8 (RONDA entre quesos).
-  const catMemory = role === 'cat'
-    ? { persecucionQueso: null, posiciones: [], pickupKey: null, giro: 0, visitas: new Map(), rondaObjetivo: null }
-    : null;
+  // y `giro` son de v6 (mirar hacia la amenaza).
+  const catMemory = role === 'cat' ? { persecucionQueso: null, posiciones: [], pickupKey: null, giro: 0 } : null;
 
   // Memoria del ratón (DISENO_V5.md #2 y #1b): última vez que vio al gato,
   // el queso al que se comprometió en IR_AL_QUESO y el que acaba de soltar.
@@ -1023,7 +1050,7 @@ function createBot(setup) {
 
     const decision = role === 'cat'
       ? decideCat(obs, graph, mouseGraphForCat, entranceByHole, holeTileKeysForCat, catMemory)
-      : decideMouse(obs, graph, holeKeys, catGraph, holeEntranceKeys, mouseMemory);
+      : decideMouse(obs, graph, holeKeys, catGraph, holeEntranceKeys, distDesdeAgujero, mouseMemory);
 
     const prevMode = modeHistory.length ? modeHistory[modeHistory.length - 1] : null;
     modeHistory.push(decision.mode);
@@ -1033,7 +1060,7 @@ function createBot(setup) {
     const logLine = buildLogFields(
       obs, role, decision.mode, prevMode, bounce, decision.target, decision.dist,
       decision.catDist, decision.deviated, decision.margin, decision.gm, decision.qs, decision.look,
-      decision.sp,
+      decision.sp, decision.rb,
     );
     console.log('D|' + JSON.stringify(logLine));
 
