@@ -1,8 +1,5 @@
-// Midnight Kitchen — bot v9.
-//
-// Ratón: con el gato efectivo, descarta los quesos desde los que ya pierde
-// la carrera de vuelta al agujero, antes de ir a levantarlos (ver R-B).
-// Gato: sin cambios desde v7 (sprint para rematar en PERSEGUIR).
+// Midnight Kitchen — bot v11.
+// Ambos roles usan rutas compactas, creencias ligeras y parámetros online.
 
 // --------------------------------------------------------------- utilidades
 
@@ -382,7 +379,7 @@ function elegirQuesoObjetivo(mouseGraph, startKey, cheeseSet, dangerZone, memory
 }
 
 /** Fracción de turnos con queso que el ratón pasa pesado (DISENO_V9.md, logs de v5+v6: 0,25 a 0,29 en todas las casas). */
-const P_PESADO = 0.27;
+const P_PESADO = 0.31;
 /** Margen de carrera bajo el cual el gato ya le gana al ratón la carrera al agujero (DISENO_V9.md, logs de v5+v6). */
 const UMBRAL_CARRERA = -4;
 
@@ -704,11 +701,80 @@ function recordarPosicionPropia(startKey, memory) {
 }
 
 /**
+ * Centro (v10): la casilla del grafo del gato que minimiza la distancia
+ * MÁXIMA (BFS) a todos los quesos -- así cubre a todos a la vez, en vez de
+ * vigilar uno solo y dejar el resto libre (evidencia: el ratón rival casi
+ * no levanta el queso vigilado, va a otro). Con 1 solo queso, su propia
+ * casilla ya es el centro. Memoriza por firma de quesos: con el mismo
+ * conjunto en el piso, no hace falta recalcular cada turno.
+ */
+function calcularCentro(obs, startKey, catGraph, memory) {
+  const cheeseKeys = obs.cheese.map(([x, y]) => keyOf(x, y));
+  if (cheeseKeys.length === 0) return null;
+  const firma = [...cheeseKeys].sort().join('|');
+  if (memory.centro && memory.centro.firma === firma) return memory.centro.key;
+
+  let key;
+  if (cheeseKeys.length === 1) {
+    key = cheeseKeys[0];
+  } else {
+    const mapas = cheeseKeys.map((qk) => bfsMapaDistancias(catGraph, qk));
+    // Un solo BFS desde el gato (no uno por candidato: con 500+ casillas,
+    // pedirle a distanceBetween un BFS nuevo por cada una salía carísimo,
+    // O(casillas al cuadrado) -- esto es O(casillas) una sola vez.
+    const mapaGato = bfsMapaDistancias(catGraph, startKey);
+    let mejor = null;
+    for (const c of Object.keys(catGraph)) {
+      let maxDist = 0;
+      let suma = 0;
+      let alcanzable = true;
+      for (const mapa of mapas) {
+        const d = mapa[c];
+        if (d === undefined) { alcanzable = false; break; }
+        if (d > maxDist) maxDist = d;
+        suma += d;
+      }
+      if (!alcanzable) continue; // esta casilla no ve a todos los quesos
+      const dGatoRaw = mapaGato[c];
+      const dGato = dGatoRaw === undefined ? Infinity : dGatoRaw;
+      if (
+        !mejor || maxDist < mejor.maxDist
+        || (maxDist === mejor.maxDist && suma < mejor.suma)
+        || (maxDist === mejor.maxDist && suma === mejor.suma && dGato < mejor.dGato)
+      ) {
+        mejor = { key: c, maxDist, suma, dGato };
+      }
+    }
+    key = mejor ? mejor.key : null; // null: ninguna casilla ve a todos los quesos a la vez
+  }
+  memory.centro = { firma, key };
+  return key;
+}
+
+/**
+ * CENTINELA (v10): va al centro (calcularCentro) y, al llegar, gira
+ * mirando a las cuatro direcciones -- así juegan los gatos que ganan
+ * (evidencia), en vez de quedarse mirando para un solo lado. Sin centro
+ * posible (ninguna casilla ve a todos los quesos a la vez), cae al
+ * VIGILAR_QUESO de siempre.
+ */
+function decideCentinela(obs, startKey, catGraph, memory) {
+  const centro = calcularCentro(obs, startKey, catGraph, memory);
+  if (!centro) {
+    const cheeseSet = new Set(obs.cheese.map(([x, y]) => keyOf(x, y)));
+    const bfs = bfsFirstStep(catGraph, startKey, (k) => cheeseSet.has(k));
+    return moveResultFromBfs('VIGILAR_QUESO', bfs, 'sin centro alcanzable: vigilo el queso más cercano');
+  }
+  const bfs = bfsFirstStep(catGraph, startKey, (k) => k === centro);
+  return moveResultFromBfs('CENTINELA', bfs, 'yendo al centro de todos los quesos');
+}
+
+/**
  * EMBOSCADA: si el ratón ya levantó un queso (memory.persecucionQueso,
  * actualizada en actualizarMemoriaGato, no acá), el gato va a esperar a la
  * entrada del agujero más cercano a ese pickup.
  *
- * Sin eso, VIGILAR_QUESO: vigilar el queso más cercano (igual que v2).
+ * Sin eso, con 1 o más quesos: CENTINELA (v10).
  */
 function decideEmboscada(obs, startKey, catGraph, memory) {
   if (memory.persecucionQueso) {
@@ -717,9 +783,7 @@ function decideEmboscada(obs, startKey, catGraph, memory) {
   }
 
   if (obs.cheese.length > 0) {
-    const cheeseSet = new Set(obs.cheese.map(([x, y]) => keyOf(x, y)));
-    const bfs = bfsFirstStep(catGraph, startKey, (k) => cheeseSet.has(k));
-    return moveResultFromBfs('VIGILAR_QUESO', bfs, 'vigilando el queso más cercano');
+    return decideCentinela(obs, startKey, catGraph, memory);
   }
 
   return stayResult('VIGILAR_QUESO', 'sin ratón, olor ni queso: espero');
@@ -775,6 +839,11 @@ function elegirLook(obs, startKey, result, catGraph, mouseGraphForCat, holeTileK
     // Ya está en la entrada (por eso es STAY): mira hacia el pasillo por
     // donde vuelve el ratón, no hacia el agujero que tiene al lado.
     return primerPasoHacia(catGraph, startKey, memory.pickupKey);
+  }
+  if (result.mode === 'CENTINELA') {
+    // v10: en el centro, gira mirando a las cuatro direcciones -- no hay
+    // una sola entrada que vigilar, el punto es cubrir todos los quesos.
+    return giroLook(memory);
   }
   if (result.mode !== 'VIGILAR_QUESO') return null; // nunca en PERSEGUIR/SEGUIR_OLOR.
 
@@ -900,13 +969,8 @@ function toBit(value) {
 }
 
 /**
- * Formato de registro v2 (ver LOGS.md para el detalle completo de cada
- * clave). El motor corta cada console.log a unos 300 caracteres; con las
- * claves largas de v1 llegábamos a ~390 y el motor nos cortaba justo los
- * últimos campos (scentMax, mouse). Por eso v2 usa claves cortas y cada rol
- * imprime SOLO sus propias claves (menos campos por línea, no solo nombres
- * más cortos). Nada de esto se usa para decidir (DISENO_V1.md §2): esta
- * función solo arma el objeto que después se imprime con console.log.
+ * Esquema compacto documentado en LOGS.md. `v` identifica la versión del
+ * bot; el resto de los campos solo facilita analizar la decisión ya tomada.
  *
  * Leyenda resumida:
  *   comunes  → t=turno  r=rol(m/c)  md=modo  pm=modo anterior  b=rebote(1/0)
@@ -937,6 +1001,7 @@ function toBit(value) {
 function buildLogFields(obs, role, mode, prevMode, bounce, target, dist, catDist, deviated, margin, gatoRecordado, quesoIgnorado, look, sprintPedido, quesosDescartados) {
   const isMouse = role === 'mouse';
   const common = {
+    v: 11,
     t: obs.turn,
     r: roleCode(role),
     md: mode,
@@ -1003,76 +1068,996 @@ function logEntrances(map, obs, role) {
  */
 function createBot(setup) {
   const { role, map, rules } = setup;
+  const width = map.width;
+  const height = map.height;
+  const cellCount = width * height;
+  const idAt = new Int32Array(cellCount);
+  idAt.fill(-1);
+  const xs = [];
+  const ys = [];
+  const chars = [];
+  const tables = [];
 
-  // Todo lo que no cambia turno a turno se precalcula una sola vez acá:
-  // el grafo de movimiento y, para el ratón, la lista de agujeros como
-  // claves listas para usar en los Set de objetivo. Desde v2, el ratón
-  // también precalcula el grafo DEL GATO (piso puro): lo necesita la zona
-  // de peligro, `cd` y ALEJARSE (DISENO_V2.md §4 y §5), y es literalmente
-  // `buildFloorGraph`, el mismo que usa el gato para moverse.
-  const graph = role === 'cat' ? buildFloorGraph(map) : buildMouseGraph(map);
-  const holeKeys = role === 'mouse' ? map.holes.map((h) => keyOf(h.x, h.y)) : null;
-  const holeEntranceKeys = role === 'mouse' ? map.holes.map((h) => keyOf(h.entrance.x, h.entrance.y)) : null;
-  const catGraph = role === 'mouse' ? buildFloorGraph(map) : null;
-  // R-B (v9): distancia desde cada agujero a cualquier casilla, una sola
-  // vez (los agujeros no se mueven) en vez de un BFS por queso y por turno.
-  const distDesdeAgujero = role === 'mouse' ? holeKeys.map((hk) => bfsMapaDistancias(graph, hk)) : null;
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const tile = map.rows[y][x];
+      if (tile !== '.' && tile !== 'T' && tile !== 'H') continue;
+      const id = xs.length;
+      idAt[y * width + x] = id;
+      xs.push(x);
+      ys.push(y);
+      chars.push(tile);
+      tables.push(tile === 'T' ? 1 : 0);
+    }
+  }
 
-  // G2 necesita, desde el gato, el grafo del ratón (para ubicar el agujero
-  // más cercano al queso) y la entrada de cada agujero (a dónde ir).
-  const mouseGraphForCat = role === 'cat' ? buildMouseGraph(map) : null;
-  const entranceByHole = role === 'cat'
-    ? Object.fromEntries(map.holes.map((h) => [keyOf(h.x, h.y), keyOf(h.entrance.x, h.entrance.y)]))
-    : null;
-  // v6 (elegirLook) necesita las claves de los agujeros en el mismo orden
-  // de map.holes, para el desempate de agujeroMasCercanoAlQueso.
-  const holeTileKeysForCat = role === 'cat' ? map.holes.map((h) => keyOf(h.x, h.y)) : null;
-  // Memoria del gato: sobrevive entre turnos para decidir (no solo para
-  // loguear), a diferencia de modeHistory de abajo. `posiciones` es
-  // DISENO_V5.md #4 (últimas 6, para no volver sobre olor viejo); `pickupKey`
-  // y `giro` son de v6 (mirar hacia la amenaza).
-  const catMemory = role === 'cat' ? { persecucionQueso: null, posiciones: [], pickupKey: null, giro: 0 } : null;
+  const V = xs.length;
+  const isTable = Uint8Array.from(tables);
+  const floorIds = [];
+  for (let id = 0; id < V; id++) if (chars[id] !== 'H') floorIds.push(id);
 
-  // Memoria del ratón (DISENO_V5.md #2 y #1b): última vez que vio al gato,
-  // el queso al que se comprometió en IR_AL_QUESO y el que acaba de soltar.
-  // ultimoTunel es de v7 (CAMBIAR_AGUJERO): de dónde y cuándo tuneló por
-  // última vez, para no rebotar enseguida al mismo agujero de origen.
-  const mouseMemory = role === 'mouse'
-    ? { ultimoGato: null, objetivoQueso: null, quesoSoltado: null, ultimoTunel: null }
-    : null;
+  const makeGraph = (includeHoles) => {
+    const graph = new Int32Array(V * 4);
+    graph.fill(-1);
+    for (let id = 0; id < V; id++) {
+      if (chars[id] === 'H') continue;
+      for (let d = 0; d < 4; d++) {
+        const [dx, dy] = DELTA[DIRS[d]];
+        const nx = xs[id] + dx;
+        const ny = ys[id] + dy;
+        if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
+        const next = idAt[ny * width + nx];
+        if (next < 0) continue;
+        if (chars[next] !== 'H') graph[id * 4 + d] = next;
+      }
+    }
+    if (includeHoles) {
+      for (const hole of map.holes) {
+        const holeId = idAt[hole.y * width + hole.x];
+        const entranceId = idAt[hole.entrance.y * width + hole.entrance.x];
+        if (holeId < 0 || entranceId < 0) continue;
+        const d = DIRS.findIndex((dir) => {
+          const [dx, dy] = DELTA[dir];
+          return xs[entranceId] + dx === xs[holeId] && ys[entranceId] + dy === ys[holeId];
+        });
+        if (d >= 0) {
+          graph[entranceId * 4 + d] = holeId;
+          graph[holeId * 4 + [1, 0, 3, 2][d]] = entranceId;
+        }
+      }
+    }
+    return graph;
+  };
+  const catGraph = makeGraph(false);
+  const mouseGraph = makeGraph(true);
+  const holes = map.holes.map((hole) => ({
+    id: idAt[hole.y * width + hole.x],
+    entrance: idAt[hole.entrance.y * width + hole.entrance.x],
+  })).filter((hole) => hole.id >= 0 && hole.entrance >= 0);
 
-  // Historial de modos: SOLO para el registro (prevMode, bounce), nunca
-  // para decidir (DISENO_V1.md §2).
-  const modeHistory = [];
+  const buildAllPairs = (graph) => {
+    const dist = new Int16Array(V * V);
+    const firstStep = new Int8Array(V * V);
+    dist.fill(-1);
+    firstStep.fill(-1);
+    const queue = new Int32Array(V);
+    for (let start = 0; start < V; start++) {
+      const offset = start * V;
+      let head = 0;
+      let tail = 0;
+      queue[tail++] = start;
+      dist[offset + start] = 0;
+      firstStep[offset + start] = 4;
+      while (head < tail) {
+        const at = queue[head++];
+        const nextDistance = dist[offset + at] + 1;
+        for (let d = 0; d < 4; d++) {
+          const next = graph[at * 4 + d];
+          if (next < 0 || dist[offset + next] >= 0) continue;
+          dist[offset + next] = nextDistance;
+          firstStep[offset + next] = at === start ? d : firstStep[offset + at];
+          queue[tail++] = next;
+        }
+      }
+    }
+    return { dist, firstStep };
+  };
+
+  const catPairs = V <= 900 ? buildAllPairs(catGraph) : null;
+  const mousePairs = V <= 900 ? buildAllPairs(mouseGraph) : null;
+  const bfsCache = new Map();
+  const graphFor = (kind) => kind === 'cat' ? catGraph : mouseGraph;
+  const pairsFor = (kind) => kind === 'cat' ? catPairs : mousePairs;
+  const bfsFrom = (kind, start) => {
+    const cacheKey = kind + ':' + start;
+    if (bfsCache.has(cacheKey)) return bfsCache.get(cacheKey);
+    const graph = graphFor(kind);
+    const dist = new Int16Array(V);
+    const parent = new Int32Array(V);
+    const first = new Int8Array(V);
+    const queue = new Int32Array(V);
+    dist.fill(-1);
+    parent.fill(-1);
+    first.fill(-1);
+    let head = 0;
+    let tail = 0;
+    queue[tail++] = start;
+    dist[start] = 0;
+    first[start] = 4;
+    while (head < tail) {
+      const at = queue[head++];
+      for (let d = 0; d < 4; d++) {
+        const next = graph[at * 4 + d];
+        if (next < 0 || dist[next] >= 0) continue;
+        dist[next] = dist[at] + 1;
+        parent[next] = at;
+        first[next] = at === start ? d : first[at];
+        queue[tail++] = next;
+      }
+    }
+    const result = { dist, parent, first };
+    if (bfsCache.size >= 64) bfsCache.delete(bfsCache.keys().next().value);
+    bfsCache.set(cacheKey, result);
+    return result;
+  };
+  const distanceId = (kind, from, to) => {
+    if (from < 0 || to < 0) return Infinity;
+    const pairs = pairsFor(kind);
+    if (pairs) {
+      const d = pairs.dist[from * V + to];
+      return d < 0 ? Infinity : d;
+    }
+    const d = bfsFrom(kind, from).dist[to];
+    return d < 0 ? Infinity : d;
+  };
+  const routeFromFirst = (kind, start, target, firstDir) => {
+    const graph = graphFor(kind);
+    const path = [start];
+    let current = start;
+    for (let steps = 0; current !== target && steps < V; steps++) {
+      const pairs = pairsFor(kind);
+      const direction = pairs
+        ? pairs.firstStep[current * V + target]
+        : bfsFrom(kind, current).first[target];
+      if (direction < 0 || direction > 3) return null;
+      current = graph[current * 4 + direction];
+      if (current < 0) return null;
+      path.push(current);
+    }
+    if (current !== target) return null;
+    const d = path.length > 1 ? DIRS[firstDir === undefined ? (
+      pairsFor(kind)
+        ? pairsFor(kind).firstStep[start * V + target]
+        : bfsFrom(kind, start).first[target]
+    ) : firstDir] : 'STAY';
+    return { target, dist: path.length - 1, move: d || 'STAY', path };
+  };
+  const routeToTarget = (kind, start, target) => {
+    if (start < 0 || target < 0) return null;
+    if (start === target) return { target, dist: 0, move: 'STAY', path: [start] };
+    const pairs = pairsFor(kind);
+    if (pairs) {
+      const d = pairs.dist[start * V + target];
+      if (d < 0) return null;
+      return routeFromFirst(kind, start, target);
+    }
+    const bfs = bfsFrom(kind, start);
+    if (bfs.dist[target] < 0) return null;
+    const path = [];
+    for (let at = target; at >= 0; at = bfs.parent[at]) {
+      path.push(at);
+      if (at === start) break;
+    }
+    path.reverse();
+    return { target, dist: bfs.dist[target], move: DIRS[bfs.first[target]], path };
+  };
+
+  const weightedRoute = (kind, start, targets, blocked, penalty) => {
+    if (start < 0 || !targets.length) return null;
+    const goalSet = new Set(targets);
+    if (goalSet.has(start)) return { target: start, dist: 0, move: 'STAY', path: [start], cost: 0 };
+    const graph = graphFor(kind);
+    const costs = new Float64Array(V);
+    const parent = new Int32Array(V);
+    const first = new Int8Array(V);
+    const heap = [];
+    costs.fill(Infinity);
+    parent.fill(-1);
+    first.fill(-1);
+    costs[start] = 0;
+    first[start] = 4;
+    const push = (cost, id) => {
+      let i = heap.length;
+      heap.push([cost, id]);
+      while (i > 0) {
+        const p = (i - 1) >> 1;
+        if (heap[p][0] <= cost) break;
+        heap[i] = heap[p];
+        i = p;
+      }
+      heap[i] = [cost, id];
+    };
+    const pop = () => {
+      const root = heap[0];
+      const last = heap.pop();
+      if (heap.length) {
+        let i = 0;
+        while (true) {
+          const left = i * 2 + 1;
+          const right = left + 1;
+          if (left >= heap.length) break;
+          let child = left;
+          if (right < heap.length && heap[right][0] < heap[left][0]) child = right;
+          if (heap[child][0] >= last[0]) break;
+          heap[i] = heap[child];
+          i = child;
+        }
+        heap[i] = last;
+      }
+      return root;
+    };
+    push(0, start);
+    let found = -1;
+    while (heap.length) {
+      const [cost, at] = pop();
+      if (cost !== costs[at]) continue;
+      if (goalSet.has(at)) { found = at; break; }
+      for (let d = 0; d < 4; d++) {
+        const next = graph[at * 4 + d];
+        if (next < 0 || (blocked && blocked.has(next))) continue;
+        const stepCost = 1 + (penalty ? Math.max(0, penalty(next)) : 0);
+        const nextCost = cost + stepCost;
+        if (nextCost >= costs[next]) continue;
+        costs[next] = nextCost;
+        parent[next] = at;
+        first[next] = at === start ? d : first[at];
+        push(nextCost, next);
+      }
+    }
+    if (found < 0) return null;
+    const path = [];
+    for (let at = found; at >= 0; at = parent[at]) {
+      path.push(at);
+      if (at === start) break;
+    }
+    path.reverse();
+    return {
+      target: found,
+      dist: path.length - 1,
+      cost: costs[found],
+      move: path.length > 1 ? DIRS[first[found]] : 'STAY',
+      path,
+    };
+  };
+  const routeToAny = (kind, start, targets, blocked, penalty) => {
+    if (blocked || penalty) return weightedRoute(kind, start, targets, blocked, penalty);
+    let best = null;
+    for (const target of targets) {
+      const route = routeToTarget(kind, start, target);
+      if (route && (!best || route.dist < best.dist)) best = route;
+    }
+    return best;
+  };
+
+  const nearestHoleDist = new Int16Array(V);
+  const nearestHoleId = new Int32Array(V);
+  nearestHoleDist.fill(-1);
+  nearestHoleId.fill(-1);
+  {
+    const queue = new Int32Array(V);
+    let head = 0;
+    let tail = 0;
+    for (const hole of holes) {
+      if (nearestHoleDist[hole.id] >= 0) continue;
+      nearestHoleDist[hole.id] = 0;
+      nearestHoleId[hole.id] = hole.id;
+      queue[tail++] = hole.id;
+    }
+    while (head < tail) {
+      const at = queue[head++];
+      for (let d = 0; d < 4; d++) {
+        const next = mouseGraph[at * 4 + d];
+        if (next < 0 || nearestHoleDist[next] >= 0) continue;
+        nearestHoleDist[next] = nearestHoleDist[at] + 1;
+        nearestHoleId[next] = nearestHoleId[at];
+        queue[tail++] = next;
+      }
+    }
+  }
+
+  const deadEndDepth = new Uint16Array(V);
+  for (const start of floorIds) {
+    let degree = 0;
+    for (let d = 0; d < 4; d++) if (mouseGraph[start * 4 + d] >= 0) degree++;
+    if (degree !== 1) continue;
+    let previous = -1;
+    let current = start;
+    for (let depth = 1; depth <= V; depth++) {
+      if (depth > deadEndDepth[current]) deadEndDepth[current] = depth;
+      if (nearestHoleDist[current] === 0) break;
+      let next = -1;
+      let exits = 0;
+      for (let d = 0; d < 4; d++) {
+        const n = mouseGraph[current * 4 + d];
+        if (n >= 0 && n !== previous) { next = n; exits++; }
+      }
+      if (exits !== 1 || chars[next] === 'H') break;
+      previous = current;
+      current = next;
+    }
+  }
+
+  const sprintLines = new Int32Array(V * 4);
+  sprintLines.fill(-1);
+  for (let id = 0; id < V; id++) {
+    for (let d = 0; d < 4; d++) {
+      const first = catGraph[id * 4 + d];
+      if (first < 0) continue;
+      sprintLines[id * 4 + d] = catGraph[first * 4 + d];
+    }
+  }
+
+  const mouseBelief = new Float32Array(V);
+  const catBelief = new Float32Array(V);
+  const seenCount = new Uint8Array(V);
+  const memory = {
+    houseParams: {
+      maxStamina: Number.isFinite(rules.catStaminaMax) ? rules.catStaminaMax : 0,
+      sprintCost: Number.isFinite(rules.catSprintCost) ? rules.catSprintCost : 2,
+      staminaRegen: 0.25,
+      heavyRate: 0.31,
+      tunnelTurnsPerTile: 1.5,
+    },
+    lastStamina: null,
+    lastStaminaTurn: null,
+    lastSprint: false,
+    lastCatTurn: -100,
+    lastMouseEvent: null,
+    lastPickup: null,
+    returnHole: null,
+    returnHoleTurn: -1,
+    tunnelStart: null,
+    hiddenTurns: 0,
+    lastMode: null,
+    modeHistory: [],
+    patrolTarget: -1,
+    patrolUntil: -1,
+  };
+
+  const idOf = (x, y) => {
+    if (!Number.isInteger(x) || !Number.isInteger(y) || x < 0 || y < 0 || x >= width || y >= height) return -1;
+    return idAt[y * width + x];
+  };
+  const coords = (id) => [xs[id], ys[id]];
+  const toKey = (id) => id < 0 ? null : keyOf(xs[id], ys[id]);
+  const euclidean = (a, b) => a < 0 || b < 0 ? Infinity : Math.hypot(xs[a] - xs[b], ys[a] - ys[b]);
+  const normalize = (belief) => {
+    let sum = 0;
+    for (let i = 0; i < V; i++) sum += belief[i];
+    if (sum > 0) for (let i = 0; i < V; i++) belief[i] /= sum;
+    return sum;
+  };
+  const seedUnseen = (belief, visible) => {
+    belief.fill(0);
+    for (const id of floorIds) {
+      if (!visible[id]) belief[id] = 1;
+      else if (isTable[id]) belief[id] = 0.35;
+    }
+    return normalize(belief);
+  };
+  const diffuse = (belief, graph, allowSprint) => {
+    const nextBelief = new Float32Array(V);
+    for (let id = 0; id < V; id++) {
+      const p = belief[id];
+      if (p <= 0) continue;
+      let degree = 1;
+      for (let d = 0; d < 4; d++) if (graph[id * 4 + d] >= 0) degree++;
+      nextBelief[id] += p / degree;
+      for (let d = 0; d < 4; d++) {
+        const next = graph[id * 4 + d];
+        if (next >= 0) nextBelief[next] += p / degree;
+      }
+      if (allowSprint) {
+        let sprintCount = 0;
+        for (let d = 0; d < 4; d++) if (sprintLines[id * 4 + d] >= 0) sprintCount++;
+        if (sprintCount) {
+          const sprintMass = p * 0.2 / sprintCount;
+          for (let d = 0; d < 4; d++) {
+            const end = sprintLines[id * 4 + d];
+            if (end >= 0) nextBelief[end] += sprintMass;
+          }
+          nextBelief[id] -= p * 0.2;
+        }
+      }
+    }
+    return nextBelief;
+  };
+  const visibleMask = (obs) => {
+    const mask = new Uint8Array(V);
+    for (const tile of obs.visible || []) {
+      if (!Array.isArray(tile)) continue;
+      const id = idOf(tile[0], tile[1]);
+      if (id >= 0) {
+        mask[id] = 1;
+        if (seenCount[id] < 255) seenCount[id]++;
+      }
+    }
+    return mask;
+  };
+  const beliefTiles = (belief, limit, visible) => {
+    const candidates = [];
+    for (let id of floorIds) if (belief[id] > 0.005) candidates.push(id);
+    candidates.sort((a, b) => belief[b] - belief[a]);
+    const result = [];
+    for (const id of candidates) {
+      if (result.length >= limit) break;
+      result.push([xs[id], ys[id], Math.min(1, belief[id] * 4)]);
+    }
+    if (visible && result.length < limit) {
+      for (let id = 0; id < V && result.length < limit; id++) {
+        if (visible[id] && isTable[id]) result.push([xs[id], ys[id], 0.25]);
+      }
+    }
+    return result;
+  };
+  const updateHouseParams = (obs) => {
+    const params = memory.houseParams;
+    const currentStamina = role === 'cat'
+      ? obs.you.stamina
+      : (obs.cat ? obs.cat.stamina : null);
+    if (Number.isFinite(currentStamina)) {
+      params.maxStamina = Math.max(params.maxStamina, currentStamina);
+      if (memory.lastStamina !== null && obs.turn === memory.lastStaminaTurn + 1) {
+        const delta = currentStamina - memory.lastStamina;
+        const sprintObserved = role === 'cat' ? memory.lastSprint : obs.bellLoud === true;
+        if (sprintObserved && delta < 0) {
+          params.sprintCost = Math.max(0.5, Math.max(params.sprintCost * 0.7, -delta));
+        } else if (delta > 0 && delta < 4) {
+          params.staminaRegen = params.staminaRegen * 0.7 + delta * 0.3;
+        }
+      }
+      memory.lastStamina = currentStamina;
+      memory.lastStaminaTurn = obs.turn;
+    }
+    if (role === 'mouse' && obs.you.carrying) {
+      const wasHeavy = memory.lastHeavy === true;
+      const nowHeavy = obs.you.heavy === true;
+      if (memory.lastHeavy !== undefined) {
+        params.heavyRate = Math.max(0.28, Math.min(0.8, params.heavyRate * 0.9 + (nowHeavy ? 0.1 : 0)));
+      }
+      memory.lastHeavy = nowHeavy;
+    } else {
+      memory.lastHeavy = undefined;
+    }
+  };
+  const updateMouseBelief = (obs, visible) => {
+    let next = diffuse(mouseBelief, mouseGraph, false);
+    const events = obs.events || [];
+    for (const event of events) {
+      if (event.type === 'pickup' || event.type === 'dropped') {
+        const anchor = idOf(event.x, event.y);
+        if (anchor >= 0) {
+          next.fill(0);
+          next[anchor] = 1;
+          memory.lastMouseEvent = { id: anchor, type: event.type, turn: obs.turn };
+          memory.lastPickup = event.type === 'pickup' ? { id: anchor, turn: obs.turn } : memory.lastPickup;
+        }
+      } else if (event.type === 'caught') {
+        const hole = holes[event.respawnHole];
+        if (hole) {
+          next.fill(0);
+          next[hole.id] = 1;
+          memory.lastMouseEvent = { id: hole.id, type: event.type, turn: obs.turn };
+          memory.lastPickup = null;
+        }
+      } else if (event.type === 'delivered') {
+        const hole = holes[event.hole];
+        if (hole) {
+          next.fill(0);
+          next[hole.id] = 1;
+          memory.lastMouseEvent = { id: hole.id, type: event.type, turn: obs.turn };
+          memory.lastPickup = null;
+        }
+      }
+      if (event.type === 'dropped') memory.lastPickup = null;
+    }
+    if (memory.lastMouseEvent && memory.lastMouseEvent.turn === obs.turn) {
+      next = diffuse(next, mouseGraph, false);
+    }
+    for (let id = 0; id < V; id++) {
+      if (visible[id]) {
+        if (isTable[id]) next[id] *= 0.35;
+        else next[id] = 0;
+      }
+    }
+    for (const [x, y, strength] of obs.scent || []) {
+      const id = idOf(x, y);
+      if (id >= 0 && Number.isFinite(strength) && (!visible[id] || isTable[id])) {
+        next[id] += Math.max(0, strength) * 0.08;
+      }
+    }
+    if (obs.mouse) {
+      const id = idOf(obs.mouse.x, obs.mouse.y);
+      next.fill(0);
+      if (id >= 0) next[id] = 1;
+    }
+    if (normalize(next) === 0) {
+      seedUnseen(next, visible);
+    }
+    mouseBelief.set(next);
+  };
+  const updateCatBelief = (obs, visible) => {
+    const hadBelief = normalize(catBelief) > 0;
+    let next = hadBelief ? diffuse(catBelief, catGraph, obs.bellLoud === true) : new Float32Array(V);
+    if (!hadBelief) for (const id of floorIds) next[id] = 1 / Math.max(1, floorIds.length);
+    for (const id of floorIds) if (visible[id]) next[id] = 0;
+    if (obs.bell !== null && Number.isFinite(obs.bell)) {
+      const beforeRing = next.slice();
+      const tolerance = Math.max(1.15, obs.bell * 0.12);
+      let ringMass = 0;
+      for (const id of floorIds) {
+        if (Math.abs(euclidean(id, idOf(obs.you.x, obs.you.y)) - obs.bell) > tolerance) next[id] = 0;
+        ringMass += next[id];
+      }
+      if (ringMass === 0) next.set(beforeRing);
+    }
+    if (obs.cat) {
+      const catId = idOf(obs.cat.x, obs.cat.y);
+      next.fill(0);
+      if (catId >= 0) {
+        next[catId] = 1;
+        memory.lastCatTurn = obs.turn;
+      }
+    }
+    if (normalize(next) === 0) {
+      seedUnseen(next, visible);
+    }
+    catBelief.set(next);
+  };
+  const riskMapFromCatBelief = () => {
+    const risk = new Float32Array(V);
+    for (const catId of floorIds) {
+      const p = catBelief[catId];
+      if (p < 0.0001) continue;
+      risk[catId] += p;
+      for (let d = 0; d < 4; d++) {
+        const next = catGraph[catId * 4 + d];
+        if (next < 0) continue;
+        risk[next] += p * 0.55;
+        const sprintEnd = sprintLines[catId * 4 + d];
+        if (sprintEnd >= 0) {
+          risk[next] += p * 0.25;
+          risk[sprintEnd] += p * 0.75;
+        }
+      }
+    }
+    return risk;
+  };
+  const chooseLook = (start, move, visible) => {
+    let bestDir = null;
+    let bestScore = 0;
+    for (let d = 0; d < 4; d++) {
+      const dir = DIRS[d];
+      if (dir === move) continue;
+      let score = 0;
+      let at = start;
+      for (let depth = 1; depth <= 3; depth++) {
+        at = catGraph[at * 4 + d];
+        if (at < 0 || visible[at]) break;
+        score += (seenCount[at] === 0 ? 1 : 0.25) + (isTable[at] ? 0.5 : 0);
+      }
+      if (score > bestScore) { bestScore = score; bestDir = dir; }
+    }
+    return bestScore >= 1.5 ? bestDir : null;
+  };
+  const makeDecision = (obs, visible) => {
+    const start = idOf(obs.you.x, obs.you.y);
+    const riskMap = role === 'mouse' ? riskMapFromCatBelief() : null;
+    const catSeen = role === 'mouse' && obs.cat ? idOf(obs.cat.x, obs.cat.y) : -1;
+    const catId = catSeen;
+    const cheeseIds = (obs.cheese || []).map(([x, y]) => idOf(x, y)).filter((id) => id >= 0);
+    const remaining = Math.max(0, (Number.isFinite(obs.maxTurns) ? obs.maxTurns : rules.maxTurns) - obs.turn - 1);
+    const dbgLimit = Math.min(100, Number.isFinite(rules.debugMaxTiles) ? rules.debugMaxTiles : 100);
+    let decision = { move: 'STAY', mode: 'ESPERA', debug: '', path: [] };
+
+    if (role === 'cat') {
+      const mouseId = obs.mouse ? idOf(obs.mouse.x, obs.mouse.y) : -1;
+      let target = -1;
+      let mode = 'PATRULLA';
+      if (mouseId >= 0) {
+        target = mouseId;
+        mode = 'PERSEGUIR';
+      } else if (memory.lastPickup && obs.turn - memory.lastPickup.turn <= 18) {
+        const pickup = memory.lastPickup.id;
+        let bestHole = null;
+        for (const hole of holes) {
+          const mouseDist = distanceId('mouse', pickup, hole.entrance);
+          const catDist = distanceId('cat', start, hole.entrance);
+          const race = catDist - Math.ceil(mouseDist * (1 + memory.houseParams.heavyRate));
+          const score = catDist + Math.max(0, -race) * 3;
+          if (Number.isFinite(catDist) && (!bestHole || score < bestHole.score)) bestHole = { hole, score, catDist };
+        }
+        if (bestHole) {
+          target = bestHole.hole.entrance;
+          mode = 'INTERCEPTAR';
+        }
+      }
+      if (target < 0) {
+        let maxBelief = -1;
+        for (const id of floorIds) {
+          if (mouseBelief[id] > maxBelief) { maxBelief = mouseBelief[id]; target = id; }
+        }
+        if (maxBelief > 0.08) mode = 'OLOR';
+      }
+      if (target < 0 || target === start && mode === 'PATRULLA') {
+        const candidateTargets = [];
+        for (const hole of holes) candidateTargets.push(hole.entrance);
+        for (const id of cheeseIds) candidateTargets.push(id);
+        let patrol = memory.patrolTarget;
+        if (patrol < 0 || obs.turn >= memory.patrolUntil || patrol === start) {
+          let bestScore = Infinity;
+          patrol = -1;
+          for (const candidate of candidateTargets) {
+            const d = distanceId('cat', start, candidate);
+            const seenPenalty = seenCount[candidate] > 0 ? 2 : 0;
+            const score = d + seenPenalty + (candidate === memory.patrolTarget ? 3 : 0);
+            if (Number.isFinite(d) && score < bestScore) { bestScore = score; patrol = candidate; }
+          }
+          memory.patrolTarget = patrol;
+          memory.patrolUntil = obs.turn + 8;
+        }
+        target = patrol;
+      }
+      let route = target >= 0 ? routeToTarget('cat', start, target) : null;
+      if (!route && cheeseIds.length) {
+        route = routeToAny('cat', start, cheeseIds);
+        if (route) { target = route.target; mode = 'PATRULLA'; }
+      }
+      if (route) {
+        decision = {
+          move: route.move,
+          mode,
+          target: toKey(target),
+          dist: route.dist,
+          path: route.path.map(toKey),
+          debug: mode + ' hacia ' + toKey(target),
+        };
+        const directMouseDist = mouseId >= 0 ? distanceId('cat', start, mouseId) : Infinity;
+        let sprint = false;
+        let sprintDir = -1;
+        if (mouseId >= 0) {
+          for (let d = 0; d < 4; d++) {
+            if (sprintLines[start * 4 + d] === mouseId && obs.you.stamina >= memory.houseParams.sprintCost) {
+              sprint = true;
+              sprintDir = d;
+              break;
+            }
+          }
+        }
+        if (!sprint && mode === 'INTERCEPTAR' && route.dist >= 2 && obs.you.stamina >= memory.houseParams.sprintCost) {
+          const firstDir = DIRS.indexOf(route.move);
+          const sprintEnd = sprintLines[start * 4 + firstDir];
+          if (sprintEnd >= 0 && distanceId('cat', sprintEnd, target) < route.dist) sprint = true;
+        }
+        if (sprint) {
+          decision.move = DIRS[sprintDir >= 0 ? sprintDir : DIRS.indexOf(route.move)];
+          decision.sprint = true;
+          decision.sp = 2;
+        } else if (directMouseDist === 2 && obs.mouse && obs.you.stamina >= memory.houseParams.sprintCost) {
+          const mx = xs[mouseId] - xs[start];
+          const my = ys[mouseId] - ys[start];
+          const d = DIRS.findIndex((dir) => DELTA[dir][0] * 2 === mx && DELTA[dir][1] * 2 === my);
+          if (d >= 0 && sprintLines[start * 4 + d] === mouseId) {
+            decision.move = DIRS[d];
+            decision.sprint = true;
+            decision.sp = 2;
+          }
+        }
+        decision.look = chooseLook(start, decision.move, visible);
+      } else {
+        const fallback = DIRS.map((dir, d) => ({ dir, id: catGraph[start * 4 + d] }))
+          .filter((entry) => entry.id >= 0)
+          .sort((a, b) => seenCount[a.id] - seenCount[b.id])[0];
+        if (fallback) {
+          decision.move = fallback.dir;
+          decision.mode = 'PATRULLA';
+          decision.path = [toKey(start), toKey(fallback.id)];
+          decision.debug = 'Patrulla activa sin objetivo visible';
+        }
+      }
+      const eventPickup = (obs.events || []).some((event) => event.type === 'pickup');
+      if (eventPickup) {
+        const event = (obs.events || []).filter((item) => item.type === 'pickup').slice(-1)[0];
+        const pickupId = idOf(event.x, event.y);
+        if (pickupId >= 0) memory.lastPickup = { id: pickupId, turn: obs.turn };
+      }
+      if (mouseId >= 0) {
+        mouseBelief.fill(0);
+        mouseBelief[mouseId] = 1;
+      }
+    } else {
+      if (memory.tunnelStart && !obs.you.tunneling && obs.you.inHole === memory.tunnelStart.to) {
+        const fromHole = holes[memory.tunnelStart.from];
+        const toHole = holes[memory.tunnelStart.to];
+        const duration = obs.turn - memory.tunnelStart.turn;
+        const tunnelDistance = fromHole && toHole ? distanceId('mouse', fromHole.id, toHole.id) : Infinity;
+        if (duration > 0 && Number.isFinite(tunnelDistance) && tunnelDistance > 0) {
+          const observedRate = duration / tunnelDistance;
+          memory.houseParams.tunnelTurnsPerTile =
+            memory.houseParams.tunnelTurnsPerTile * 0.7 + observedRate * 0.3;
+        }
+        memory.tunnelStart = null;
+      }
+      if (obs.you.tunneling) {
+        decision = { move: 'STAY', mode: 'TUNEL', debug: 'Esperando dentro del túnel' };
+        memory.hiddenTurns++;
+      } else if (obs.you.inHole !== null) {
+        memory.hiddenTurns++;
+        const currentHole = obs.you.inHole;
+        const current = holes[currentHole];
+        let tunnelTarget = -1;
+        let bestValue = -Infinity;
+        const hidingTaxEvery = Math.max(1, rules.hidingTaxEvery || 15);
+        const cheeseTargets = cheeseIds.filter((id) => {
+          const toHole = nearestHoleDist[id] < 0 ? Infinity : nearestHoleDist[id];
+          return toHole <= remaining * (1 - memory.houseParams.heavyRate);
+        });
+        for (let i = 0; i < holes.length; i++) {
+          if (i === currentHole) continue;
+          const hole = holes[i];
+          const tunnelDistance = Math.max(1, distanceId('mouse', current ? current.id : start, hole.id));
+          const tunnelTurns = Math.ceil(tunnelDistance * memory.houseParams.tunnelTurnsPerTile);
+          const routeToCheese = cheeseTargets.length
+            ? Math.min(...cheeseTargets.map((id) => distanceId('mouse', hole.id, id)))
+            : Infinity;
+          const exposedThreat = obs.bellLoud
+            ? 4
+            : (obs.bell !== null && obs.bell <= 5 ? (6 - obs.bell) : 0);
+          const hidingTaxCost = Math.floor((memory.hiddenTurns + tunnelTurns) / hidingTaxEvery);
+          const value = exposedThreat * 2 + (Number.isFinite(routeToCheese) ? 5 - routeToCheese : -10) - tunnelTurns * 0.7 - hidingTaxCost * 4;
+          if (value > bestValue && tunnelTurns < remaining && (exposedThreat > 0 || routeToCheese <= 5)) {
+            bestValue = value;
+            tunnelTarget = i;
+          }
+        }
+        if (tunnelTarget >= 0 && bestValue > 0) {
+          decision = { move: 'STAY', tunnel: tunnelTarget, mode: 'TUNEL', debug: 'Túnel elegido por amenaza o acceso a queso' };
+          memory.tunnelStart = { from: currentHole, to: tunnelTarget, turn: obs.turn };
+        } else {
+          decision = { move: 'STAY', mode: 'AGUJERO', debug: 'Permanezco a salvo; evito hidingTax innecesario' };
+        }
+      } else if (obs.you.carrying) {
+        const params = memory.houseParams;
+        const knownCatDistance = catId >= 0 ? distanceId('cat', start, catId) : Infinity;
+        const bellDistance = Number.isFinite(obs.bell) ? obs.bell : Infinity;
+        const dangerDistance = Math.min(knownCatDistance, bellDistance, obs.bellLoud ? 3 : Infinity);
+        let bestHole = null;
+        for (let i = 0; i < holes.length; i++) {
+          const hole = holes[i];
+          const dist = distanceId('mouse', start, hole.entrance);
+          const margin = catId >= 0
+            ? distanceId('cat', catId, hole.entrance) - Math.ceil(dist * (1 + params.heavyRate))
+            : (Number.isFinite(bellDistance) ? bellDistance - dist * (1 + params.heavyRate) : 0);
+          const score = dist + (catId >= 0 ? Math.max(0, 2 - margin) * 2 : (riskMap[hole.entrance] || 0) * 5);
+          if (Number.isFinite(dist) && (!bestHole || score < bestHole.score)) bestHole = { i, hole, score, margin };
+        }
+        let selected = bestHole;
+        const committed = holes[memory.returnHole];
+        if (committed && selected && memory.returnHole !== selected.i) {
+          const committedRoute = routeToTarget('mouse', start, committed.entrance);
+          const physicallyBlocked = committedRoute && catId >= 0
+            && committedRoute.path.slice(1).some((id) => id === catId);
+          const alternativeClearlyBetter = bestHole.score + 3 < (
+            committedRoute ? committedRoute.dist + (catId >= 0 && bestHole.margin > 2 ? 0 : 2) : Infinity
+          );
+          if (!physicallyBlocked || !alternativeClearlyBetter) {
+            selected = {
+              i: memory.returnHole,
+              hole: committed,
+              score: committedRoute ? committedRoute.dist : Infinity,
+              margin: bestHole.margin,
+            };
+          }
+        }
+        if (selected) {
+          memory.returnHole = selected.i;
+          memory.returnHoleTurn = obs.turn;
+        }
+        const goal = selected ? selected.hole.entrance : (nearestHoleId[start] >= 0 ? holes.find((h) => h.id === nearestHoleId[start])?.entrance : -1);
+        const blocked = catId >= 0 ? new Set([catId]) : null;
+        const routePenalty = (id) => {
+          let penalty = (riskMap[id] || 0) * 18 + deadEndDepth[id] * 0.8;
+          if (isTable[id]) penalty *= 0.35;
+          return penalty;
+        };
+        let route = goal >= 0 ? weightedRoute('mouse', start, [goal], blocked, routePenalty) : null;
+        if (!route && goal >= 0 && catId >= 0) {
+          const staging = [];
+          for (let d = 0; d < 4; d++) {
+            const neighbor = mouseGraph[goal * 4 + d];
+            if (neighbor >= 0 && neighbor !== catId && chars[neighbor] !== 'H') staging.push(neighbor);
+          }
+          route = weightedRoute('mouse', start, staging, blocked, routePenalty);
+        }
+        const toHole = goal >= 0 ? distanceId('mouse', start, goal) : Infinity;
+        const catCanCatchSoon = Number.isFinite(dangerDistance) && dangerDistance <= 2;
+        const cannotEscape = !Number.isFinite(toHole) || toHole * (1 + params.heavyRate) > dangerDistance + 1;
+        if (obs.you.heavy && catCanCatchSoon && cannotEscape) {
+          decision = { move: 'STAY', drop: true, mode: 'SOLTAR', target: toKey(goal), dist: toHole, debug: 'Suelto el queso: no alcanzo el agujero antes de la captura' };
+          memory.returnHole = null;
+        } else if (obs.you.heavy) {
+          decision = { move: 'STAY', mode: 'PESADO', target: toKey(goal), dist: toHole, debug: 'Turno pesado: conservo la ruta sin asumir movimiento' };
+        } else if (route) {
+          decision = {
+            move: route.move,
+            mode: 'VOLVER',
+            target: toKey(goal),
+            dist: toHole,
+            path: route.path.map(toKey),
+            catDist: Number.isFinite(knownCatDistance) ? knownCatDistance : null,
+            debug: 'Volviendo al agujero ' + (selected ? selected.i : '?'),
+          };
+        }
+      } else {
+        const riskyCheeses = new Set();
+        let eligibleCheeses = [];
+        const catBeliefCandidates = [];
+        let maxCatBelief = 0;
+        for (const id of floorIds) maxCatBelief = Math.max(maxCatBelief, catBelief[id]);
+        if (catId >= 0) catBeliefCandidates.push(catId);
+        else if (Number.isFinite(obs.bell)) {
+          const ownId = idOf(obs.you.x, obs.you.y);
+          const tolerance = Math.max(1.15, obs.bell * 0.12);
+          for (const id of floorIds) {
+            if (catBelief[id] > 0 && Math.abs(euclidean(id, ownId) - obs.bell) <= tolerance) {
+              catBeliefCandidates.push(id);
+            }
+          }
+        } else if (obs.bellLoud || obs.turn - memory.lastCatTurn <= 4) {
+          for (const id of floorIds) {
+            if (catBelief[id] >= Math.max(0.005, maxCatBelief * 0.15)) catBeliefCandidates.push(id);
+          }
+        }
+        const cheeseAssessment = new Map();
+        for (const cheese of cheeseIds) {
+          const routeDist = distanceId('mouse', start, cheese);
+          const holeDist = nearestHoleDist[cheese] < 0 ? Infinity : nearestHoleDist[cheese];
+          const horizonOK = routeDist + Math.ceil(holeDist * (1 + memory.houseParams.heavyRate)) <= remaining;
+          let worstMargin = Infinity;
+          if (catBeliefCandidates.length) {
+            for (const possibleCat of catBeliefCandidates) {
+              const nearestHole = holes.find((hole) => hole.id === nearestHoleId[cheese]);
+              const catToHole = nearestHole
+                ? distanceId('cat', possibleCat, nearestHole.entrance)
+                : Infinity;
+              const mouseToHole = holeDist;
+              const margin = catToHole - Math.ceil(mouseToHole * (1 + memory.houseParams.heavyRate));
+              worstMargin = Math.min(worstMargin, margin);
+            }
+          } else if (Number.isFinite(obs.bell)) {
+            worstMargin = obs.bell <= 4 ? -1 : 2;
+          }
+          const raceOK = !Number.isFinite(worstMargin) || worstMargin >= 1;
+          const ok = horizonOK && raceOK;
+          cheeseAssessment.set(cheese, { ok, routeDist, holeDist, margin: worstMargin });
+          if (ok) eligibleCheeses.push(cheese);
+          else riskyCheeses.add(cheese);
+        }
+        const closeThreat = catId >= 0
+          ? distanceId('cat', start, catId) <= 4
+          : (Number.isFinite(obs.bell) && obs.bell <= 4) || obs.bellLoud === true;
+        const escapeMode = closeThreat || eligibleCheeses.length === 0;
+        if (!escapeMode && eligibleCheeses.length) {
+          const blockedCheeses = new Set(riskyCheeses);
+          const route = weightedRoute('mouse', start, eligibleCheeses, blockedCheeses, (id) => {
+            let penalty = (riskMap[id] || 0) * 16 + deadEndDepth[id] * 0.7;
+            if (isTable[id]) penalty *= 0.35;
+            return penalty;
+          });
+          if (route) {
+            const assessment = cheeseAssessment.get(route.target);
+            decision = {
+              move: route.move,
+              mode: 'QUESO',
+              target: toKey(route.target),
+              dist: assessment.routeDist,
+              margin: Number.isFinite(assessment.margin) ? assessment.margin : null,
+              rb: riskyCheeses.size,
+              path: route.path.map(toKey),
+              debug: 'Queso seguro ' + toKey(route.target) + ', horizonte y carrera válidos',
+            };
+          }
+        }
+        if (decision.mode === 'ESPERA') {
+          const choices = [];
+          for (let d = 0; d < 4; d++) {
+            const next = mouseGraph[start * 4 + d];
+            if (next < 0) continue;
+            const forbiddenCheese = riskyCheeses.has(next);
+            const catDistance = catId >= 0 ? distanceId('cat', next, catId) : Infinity;
+            const danger = catId >= 0
+              ? (catDistance <= 1 ? 100 : catDistance <= 2 ? 25 : catDistance <= 4 ? 8 : 0)
+              : (riskMap[next] || 0) * 50;
+            const score = danger + deadEndDepth[next] * 0.4 - (isTable[next] ? 2 : 0);
+            choices.push({ id: next, dir: DIRS[d], score, danger, forbiddenCheese });
+          }
+          const safeChoices = choices.filter((choice) => !choice.forbiddenCheese);
+          const mayTakeLosingCheese = safeChoices.length === 0 || safeChoices.every((choice) => choice.danger >= 100);
+          const candidates = mayTakeLosingCheese ? choices : safeChoices;
+          const best = candidates.sort((a, b) => a.score - b.score)[0];
+          if (best) {
+            decision = {
+              move: best.dir,
+              mode: 'ALEJARSE',
+              target: toKey(best.id),
+              catDist: catId >= 0 ? distanceId('cat', start, catId) : null,
+              rb: riskyCheeses.size,
+              path: [toKey(start), toKey(best.id)],
+              debug: best.forbiddenCheese
+                ? 'Todas las salidas seguras son letales: acepto el queso perdedor para evitar captura inmediata'
+                : 'Evasión: evito el gato y los quesos con carrera perdida',
+            };
+          } else {
+            decision = { move: 'STAY', mode: 'ALEJARSE', debug: 'Sin movimiento legal' };
+          }
+        }
+      }
+      if (obs.events) {
+        for (const event of obs.events) {
+          if (event.type === 'hidingTax') memory.hiddenTurns = 0;
+          if (event.type === 'pickup' || event.type === 'dropped' || event.type === 'caught' || event.type === 'delivered') {
+            if (event.type === 'caught' || event.type === 'delivered') memory.returnHole = null;
+          }
+        }
+      }
+    }
+
+    const debugTiles = [];
+    if (decision.path) {
+      for (const key of decision.path) {
+        if (debugTiles.length >= dbgLimit) break;
+        const [x, y] = parseKey(key);
+        debugTiles.push([x, y, 1]);
+      }
+    }
+    if (role === 'cat' && debugTiles.length < dbgLimit) {
+      debugTiles.push(...beliefTiles(mouseBelief, dbgLimit - debugTiles.length, visible));
+    } else if (role === 'mouse' && debugTiles.length < dbgLimit) {
+      debugTiles.push(...beliefTiles(catBelief, dbgLimit - debugTiles.length, visible));
+    }
+    decision.debugTiles = debugTiles.slice(0, dbgLimit);
+    if (typeof decision.debug !== 'string') decision.debug = '';
+    return decision;
+  };
 
   return function act(obs) {
     if (obs.turn === 1) logEntrances(map, obs, role);
-
-    const decision = role === 'cat'
-      ? decideCat(obs, graph, mouseGraphForCat, entranceByHole, holeTileKeysForCat, catMemory)
-      : decideMouse(obs, graph, holeKeys, catGraph, holeEntranceKeys, distDesdeAgujero, mouseMemory);
-
-    const prevMode = modeHistory.length ? modeHistory[modeHistory.length - 1] : null;
-    modeHistory.push(decision.mode);
-    if (modeHistory.length > 3) modeHistory.shift();
-    const bounce = detectBounce(modeHistory);
-
+    updateHouseParams(obs);
+    const visible = visibleMask(obs);
+    if (role === 'cat') updateMouseBelief(obs, visible);
+    else updateCatBelief(obs, visible);
+    const decision = makeDecision(obs, visible);
+    const previousMode = memory.lastMode;
+    memory.modeHistory.push(decision.mode);
+    if (memory.modeHistory.length > 3) memory.modeHistory.shift();
+    const bounce = detectBounce(memory.modeHistory);
     const logLine = buildLogFields(
-      obs, role, decision.mode, prevMode, bounce, decision.target, decision.dist,
-      decision.catDist, decision.deviated, decision.margin, decision.gm, decision.qs, decision.look,
-      decision.sp, decision.rb,
+      obs, role, decision.mode, previousMode, bounce, decision.target, decision.dist,
+      decision.catDist, decision.deviated, decision.margin, undefined, decision.qs,
+      decision.look, decision.sp, decision.rb,
     );
     console.log('D|' + JSON.stringify(logLine));
-
-    const action = { move: decision.move, debug: clampText(decision.debug, rules.debugMaxChars) };
+    const action = {
+      move: decision.move,
+      debug: clampText(decision.debug, rules.debugMaxChars),
+    };
     if (decision.drop) action.drop = true;
     if (decision.look) action.look = decision.look;
     if (decision.sprint) action.sprint = true;
     if (decision.tunnel !== undefined) action.tunnel = decision.tunnel;
-    if (decision.path) {
-      const debugTiles = routeToDebugTiles(decision.path, rules.debugMaxTiles);
-      if (debugTiles.length) action.debugTiles = debugTiles;
-    }
+    if (decision.debugTiles && decision.debugTiles.length) action.debugTiles = decision.debugTiles;
+    memory.lastMode = decision.mode;
+    memory.lastSprint = role === 'cat' && decision.sprint === true;
     return action;
   };
 }

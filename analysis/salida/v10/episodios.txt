@@ -1,0 +1,93 @@
+=== CONTROL DE CALIDAD (data/v10) ===
+piernas leídas: 14 | OK: 14 | excluidas: 0
+Campos de rules encontrados: botTimeMs, catStaminaMax, catVisionRange, catchPoints, cheesePoints, debugMaxChars, debugMaxTiles, gameTimeMs, height, hidingTaxEvery, initTimeMs, maxTurns, mouseVisionRange, width
+
+=== A) EPISODIOS DEL RATÓN ===
+fin    caught  delivered  dropped  fin_partida  vuelve_sin_queso
+bot
+mio        80         27        1            6                 3
+rival       0         34        8            4                36
+
+=== B) EPISODIOS DEL GATO ===
+fin    caught  delivered  dropped  fin_partida
+bot
+mio         0         34        8            0
+rival      66         27        1            2
+cheeseSpawned -> pickup: 10.1 turnos en promedio (n=107)
+
+=== D) RIESGO POR CAUSA (Logit, cluster por partida) ===
+ratón: captura (n_obs=2728, n_eventos=80):
+             odds_ratio  ci95_bajo  ci95_alto
+const              0.01       0.00       0.02
+fase_VUELTA        1.41       0.55       3.62
+h_1.0             23.44      13.05      42.08
+  aviso: ratón: entrega: 27 eventos insuficientes para 10 parámetros, se sacan variables
+  aviso: ratón: entrega: 27 eventos insuficientes para 8 parámetros, se sacan variables
+  aviso: ratón: entrega: 27 eventos insuficientes para 7 parámetros, se sacan variables
+  aviso: ratón: entrega: 27 eventos insuficientes para 6 parámetros, se sacan variables
+  aviso: ratón: entrega: 27 eventos insuficientes para 4 parámetros, se sacan variables
+  aviso: ratón: entrega: separación perfecta con ['h'] (coeficiente o IC no finito); se prueba con menos variables
+ratón: entrega (n_obs=928, n_eventos=27):
+  aviso: gato: entrega: 34 eventos insuficientes para 10 parámetros, se sacan variables
+  aviso: gato: entrega: 34 eventos insuficientes para 9 parámetros, se sacan variables
+  aviso: gato: entrega: 34 eventos insuficientes para 6 parámetros, se sacan variables
+  aviso: gato: entrega: 34 eventos insuficientes para 4 parámetros, se sacan variables
+gato: entrega (n_obs=570, n_eventos=34):
+                 odds_ratio  ci95_bajo  ci95_alto
+const                  0.07       0.06       0.08
+raton_visto_1.0        0.61       0.32       1.18
+  aviso: gato: captura: 0 eventos insuficientes para 10 parámetros, se sacan variables
+  aviso: gato: captura: 0 eventos insuficientes para 9 parámetros, se sacan variables
+  aviso: gato: captura: 0 eventos insuficientes para 6 parámetros, se sacan variables
+  aviso: gato: captura: 0 eventos insuficientes para 4 parámetros, se sacan variables
+  aviso: gato: captura: 0 eventos insuficientes para 1 parámetros, se sacan variables
+  aviso: gato: captura: muy pocos eventos (0), no se ajusta modelo
+gato: captura (n_obs=570, n_eventos=0):
+
+=== E) COMPARACIÓN PAREADA POR CASA ===
+diff_raton: media=-3.00 IC95%=[-14.04, 8.04] (n=7)
+diff_gato: media=-29.57 IC95%=[-37.44, -21.7] (n=7)
+  cottage: diff_raton media=12.00 (n=1)
+  kitchen: diff_raton media=-10.50 (n=2)
+  mansion: diff_raton media=-3.00 (n=1)
+  pantry: diff_raton media=-3.00 (n=1)
+  ranch: diff_raton media=-3.00 (n=2)
+
+=== F) TASA AJUSTADA (beta-binomial) ===
+Captura de mi ratón por casa:
+          episodios  eventos  tasa_cruda  tasa_ajustada
+casa
+19x13_4h         21       15       0.714          0.705
+25x17_4h         46       27       0.587          0.633
+29x19_3h         14       10       0.714          0.703
+31x15_8h         36       28       0.778          0.740
+Captura de mi ratón por rival:
+                 episodios  eventos  tasa_cruda  tasa_ajustada
+rival
+agustin-meowtel         18       15       0.833          0.757
+apaggihitta             17       11       0.647          0.661
+bruno-meowtel           18        9       0.500          0.585
+imanol-meowtel          14       10       0.714          0.693
+lucas-meowtel           11        7       0.636          0.660
+timothy                 39       28       0.718          0.705
+Entrega rival (contra mi gato) por casa:
+          episodios  eventos  tasa_cruda  tasa_ajustada
+casa
+19x13_4h          1        1       1.000          0.849
+25x17_4h         23       21       0.913          0.899
+29x19_3h          7        4       0.571          0.646
+31x15_8h         11        8       0.727          0.745
+Entrega rival (contra mi gato) por rival:
+                 episodios  eventos  tasa_cruda  tasa_ajustada
+rival
+agustin-meowtel         11        8       0.727          0.756
+apaggihitta             14       13       0.929          0.911
+bruno-meowtel            6        5       0.833          0.837
+imanol-meowtel           7        4       0.571          0.664
+lucas-meowtel            3        3       1.000          0.915
+timothy                  1        1       1.000          0.878
+
+=== TOP 3: dónde pierdo más puntos que el rival en la misma situación ===
+  [ratón] hc=5+ agujeros: mío=-1.83 rival=1.85 (diff=3.68, n_mio=36) -> candidata: mg (margen del agujero elegido)
+  [gato] d_gato_entrada=>6: mío=-2.41 rival=1.03 (diff=3.45, n_mio=41) -> candidata: emb (emboscada a tiempo)
+  [ratón] dist_min_gato=<=2: mío=-2.82 rival=0.00 (diff=2.82, n_mio=85) -> candidata: cd/gm (memoria del gato)

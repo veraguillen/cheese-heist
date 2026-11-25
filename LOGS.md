@@ -31,9 +31,10 @@ Ejemplo: `D|{"hdr":1,"r":"m","w":21,"hg":15,"hc":3,"ch":2,"en":[[3,1],[10,13],[1
 
 | Clave | Significado | Ejemplo |
 |---|---|---|
+| `v` | Versión del bot que escribió la línea | `11` |
 | `t` | Turno | `57` |
 | `r` | Rol: `m` = ratón, `c` = gato | `"c"` |
-| `md` | Modo elegido este turno (v2 suma `ALEJARSE`; v3 suma `EMBOSCADA`, gato; v5 suma `SOLTAR`, ratón; v7 suma `CAMBIAR_AGUJERO`, ratón; v8 suma `RONDA`, gato) | `"IR_AL_QUESO"` |
+| `md` | Modo elegido este turno (v2 suma `ALEJARSE`; v3 suma `EMBOSCADA`, gato; v5 suma `SOLTAR`, ratón; v7 suma `CAMBIAR_AGUJERO`, ratón; v8 suma `RONDA`, gato, descartado; v10 suma `CENTINELA`, gato; v11 suma `INTERCEPTAR`, `PATRULLA`, `QUESO`, `VOLVER` y otros modos nuevos) | `"QUESO"` |
 | `pm` | Modo del turno anterior (`null` en el turno 1) | `"VOLVER"` |
 | `b` | Rebote: patrón A, B, A en los últimos 3 turnos (`1`/`0`) | `0` |
 | `x`, `y` | Posición propia al decidir (antes de moverse) | `13`, `11` |
@@ -58,6 +59,7 @@ Ejemplo: `D|{"hdr":1,"r":"m","w":21,"hg":15,"hc":3,"ch":2,"en":[[3,1],[10,13],[1
 | `mg` | (v3) Margen del agujero elegido en VOLVER, o `null` si no aplica | `3` |
 | `gm` | (v5) Gato recordado y no visto este turno (`1`), visto (`0`), o `null` si no hay gato (visto ni recordado) | `1` |
 | `qs` | (v5) Se ignoró un queso soltado como candidato en IR_AL_QUESO (`1`/`0`) | `1` |
+| `rb` | (v9) Cantidad de quesos descartados este turno por la carrera (R-B); la clave no aparece si es `0` | `2` |
 
 ## Campos solo del gato
 
@@ -96,3 +98,11 @@ Ejemplo: `D|{"t":57,"r":"c","emb":1,"dg":6,"dr":9}`
   claves `tg` y `d` que ya tenía, sin campos nuevos.
 - v8: gato suma el modo `RONDA` (con 2 o más quesos en el piso, en vez de
   vigilar uno quieto); reusa `tg` (queso objetivo) y `d`, sin campos nuevos.
+  (v8 perdió Elo y quedó descartado como base; v9 y v10 siguen desde v7.)
+- v9: ratón suma el campo `rb` (cantidad de quesos descartados por la
+  carrera al agujero; solo aparece cuando es mayor que 0).
+- v10: gato suma el modo `CENTINELA` (con 1 o más quesos en el piso, en vez
+  de vigilar/rondar: se ubica en la casilla más cercana a todos a la vez);
+  reusa `tg` (casilla del centro) y `d`, sin campos nuevos.
+- v11: todas las líneas D| incluyen `v:11` para identificar inequívocamente
+  la versión; las decisiones usan los modos registrados en `md`.
