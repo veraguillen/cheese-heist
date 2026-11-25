@@ -33,7 +33,7 @@ Ejemplo: `D|{"hdr":1,"r":"m","w":21,"hg":15,"hc":3,"ch":2,"en":[[3,1],[10,13],[1
 |---|---|---|
 | `t` | Turno | `57` |
 | `r` | Rol: `m` = ratón, `c` = gato | `"c"` |
-| `md` | Modo elegido este turno (v2 suma `ALEJARSE`; v3 suma `EMBOSCADA`, gato; v5 suma `SOLTAR`, ratón) | `"IR_AL_QUESO"` |
+| `md` | Modo elegido este turno (v2 suma `ALEJARSE`; v3 suma `EMBOSCADA`, gato; v5 suma `SOLTAR`, ratón; v7 suma `CAMBIAR_AGUJERO`, ratón) | `"IR_AL_QUESO"` |
 | `pm` | Modo del turno anterior (`null` en el turno 1) | `"VOLVER"` |
 | `b` | Rebote: patrón A, B, A en los últimos 3 turnos (`1`/`0`) | `0` |
 | `x`, `y` | Posición propia al decidir (antes de moverse) | `13`, `11` |
@@ -69,6 +69,7 @@ Ejemplo: `D|{"hdr":1,"r":"m","w":21,"hg":15,"hc":3,"ch":2,"en":[[3,1],[10,13],[1
 | `sm` | Olor más fuerte (0 a 1), o `null` | `0.93` |
 | `mo` | Ratón visto: `[x, y, lleva queso 1/0]`, o `null` | `[16,12,1]` |
 | `lk` | (v6) Dirección del `look` emitido este turno, o `null` si no se emitió | `"W"` |
+| `sp` | (v7) Distancia a la que se PIDIÓ el sprint (`1` o `2`); la clave no aparece si no se pidió (no es `null`, falta) | `1` |
 
 ## Línea de emboscada a tiempo (gato, solo en el turno de un evento `pickup`)
 
@@ -90,3 +91,6 @@ Ejemplo: `D|{"t":57,"r":"c","emb":1,"dg":6,"dr":9}`
 - v2: claves cortas de este documento.
 - v5: ratón suma el modo `SOLTAR` (con `drop:true` en la acción) y los campos `gm` (gato recordado o visto) y `qs` (queso soltado ignorado en IR_AL_QUESO). Gato suma la línea de emboscada a tiempo (`emb`/`dg`/`dr`).
 - v6: gato suma el campo `lk` (dirección del `look` emitido, o `null`).
+- v7: gato suma el campo `sp` (solo en los turnos con sprint). Ratón suma
+  el modo `CAMBIAR_AGUJERO` (con `tunnel: n` en la acción); reusa las
+  claves `tg` y `d` que ya tenía, sin campos nuevos.
