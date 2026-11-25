@@ -33,7 +33,7 @@ Ejemplo: `D|{"hdr":1,"r":"m","w":21,"hg":15,"hc":3,"ch":2,"en":[[3,1],[10,13],[1
 |---|---|---|
 | `t` | Turno | `57` |
 | `r` | Rol: `m` = ratón, `c` = gato | `"c"` |
-| `md` | Modo elegido este turno (v2 suma `ALEJARSE`; v3 suma `EMBOSCADA`, gato; v5 suma `SOLTAR`, ratón; v7 suma `CAMBIAR_AGUJERO`, ratón) | `"IR_AL_QUESO"` |
+| `md` | Modo elegido este turno (v2 suma `ALEJARSE`; v3 suma `EMBOSCADA`, gato; v5 suma `SOLTAR`, ratón; v7 suma `CAMBIAR_AGUJERO`, ratón; v8 suma `RONDA`, gato) | `"IR_AL_QUESO"` |
 | `pm` | Modo del turno anterior (`null` en el turno 1) | `"VOLVER"` |
 | `b` | Rebote: patrón A, B, A en los últimos 3 turnos (`1`/`0`) | `0` |
 | `x`, `y` | Posición propia al decidir (antes de moverse) | `13`, `11` |
@@ -94,3 +94,5 @@ Ejemplo: `D|{"t":57,"r":"c","emb":1,"dg":6,"dr":9}`
 - v7: gato suma el campo `sp` (solo en los turnos con sprint). Ratón suma
   el modo `CAMBIAR_AGUJERO` (con `tunnel: n` en la acción); reusa las
   claves `tg` y `d` que ya tenía, sin campos nuevos.
+- v8: gato suma el modo `RONDA` (con 2 o más quesos en el piso, en vez de
+  vigilar uno quieto); reusa `tg` (queso objetivo) y `d`, sin campos nuevos.

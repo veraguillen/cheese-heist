@@ -1,9 +1,8 @@
-// Midnight Kitchen — bot v7.
+// Midnight Kitchen — bot v8.
 //
-// Ratón: atrapado en su agujero (entrada en peligro) con ruta segura al
-// queso desde otro agujero, cambia por túnel en vez de esperar adentro.
-// Gato: en PERSEGUIR, con el ratón visible en línea recta a 1 o 2 casillas,
-// sprinta para rematar en vez de caminar (ver puedeRematar).
+// Ratón: sin cambios desde v7 (atrapado en su agujero, cambia por túnel).
+// Gato: con 2 o más quesos en el piso y sin información, en vez de
+// quedarse quieto sobre uno solo, ronda entre todos (ver decideRonda).
 
 // --------------------------------------------------------------- utilidades
 
@@ -627,11 +626,59 @@ function recordarPosicionPropia(startKey, memory) {
 }
 
 /**
+ * RONDA (v8): el queso alcanzable con la visita más antigua (nunca visitado
+ * cuenta como el más antiguo de todos). Desempate: el más cercano por BFS;
+ * si sigue el empate, el primero en el orden de obs.cheese (sale solo: solo
+ * se reemplaza con una mejora estricta). Null si ninguno es alcanzable.
+ */
+function elegirQuesoRonda(obs, catGraph, startKey, memory) {
+  let mejor = null;
+  for (const [x, y] of obs.cheese) {
+    const key = keyOf(x, y);
+    const dist = distanceBetween(catGraph, startKey, key);
+    if (dist === null) continue; // no alcanzable
+    const visita = memory.visitas.has(key) ? memory.visitas.get(key) : -Infinity;
+    if (!mejor || visita < mejor.visita || (visita === mejor.visita && dist < mejor.dist)) {
+      mejor = { key, dist, visita };
+    }
+  }
+  return mejor ? mejor.key : null;
+}
+
+/**
+ * RONDA (v8): con 2 o más quesos, en vez de vigilar uno quieto, recorrerlos
+ * (evidencia: el ratón rival rodea al gato quieto y levanta otro queso que
+ * nadie vigila). Compromiso: mientras el objetivo siga en el piso, seguir
+ * yendo ahí aunque otro quede más cerca -- si no, nunca llegaría a ninguno
+ * con el gato recalculando "el más cercano" cada turno.
+ */
+function decideRonda(obs, startKey, catGraph, memory) {
+  const cheeseKeys = new Set(obs.cheese.map(([x, y]) => keyOf(x, y)));
+  if (!memory.rondaObjetivo || !cheeseKeys.has(memory.rondaObjetivo)) {
+    memory.rondaObjetivo = elegirQuesoRonda(obs, catGraph, startKey, memory);
+  }
+  if (!memory.rondaObjetivo) {
+    return stayResult('RONDA', 'ningún queso alcanzable: espero');
+  }
+  const bfs = bfsFirstStep(catGraph, startKey, (k) => k === memory.rondaObjetivo);
+  const result = moveResultFromBfs('RONDA', bfs, 'rondando entre los quesos: voy al de visita más antigua');
+  if (bfs && bfs.dir === 'STAY') {
+    // Llegué: registro la visita y suelto el objetivo para que el turno
+    // que viene elija el próximo (el queso sigue en el piso, así que la
+    // regla de "ya no está en obs.cheese" no alcanza para forzar el cambio).
+    memory.visitas.set(memory.rondaObjetivo, obs.turn);
+    memory.rondaObjetivo = null;
+  }
+  return result;
+}
+
+/**
  * EMBOSCADA: si el ratón ya levantó un queso (memory.persecucionQueso,
  * actualizada en actualizarMemoriaGato, no acá), el gato va a esperar a la
  * entrada del agujero más cercano a ese pickup.
  *
- * Sin eso, VIGILAR_QUESO: vigilar el queso más cercano (igual que v2).
+ * Sin eso, con 1 solo queso: VIGILAR_QUESO (igual que v2). Con 2 o más:
+ * RONDA (v8) -- vigilar uno quieto deja el resto sin cubrir.
  */
 function decideEmboscada(obs, startKey, catGraph, memory) {
   if (memory.persecucionQueso) {
@@ -639,7 +686,11 @@ function decideEmboscada(obs, startKey, catGraph, memory) {
     return moveResultFromBfs('EMBOSCADA', bfs, 'el ratón lleva queso: espero en la entrada más cercana al pickup');
   }
 
-  if (obs.cheese.length > 0) {
+  if (obs.cheese.length >= 2) {
+    return decideRonda(obs, startKey, catGraph, memory);
+  }
+
+  if (obs.cheese.length === 1) {
     const cheeseSet = new Set(obs.cheese.map(([x, y]) => keyOf(x, y)));
     const bfs = bfsFirstStep(catGraph, startKey, (k) => cheeseSet.has(k));
     return moveResultFromBfs('VIGILAR_QUESO', bfs, 'vigilando el queso más cercano');
@@ -699,7 +750,9 @@ function elegirLook(obs, startKey, result, catGraph, mouseGraphForCat, holeTileK
     // donde vuelve el ratón, no hacia el agujero que tiene al lado.
     return primerPasoHacia(catGraph, startKey, memory.pickupKey);
   }
-  if (result.mode !== 'VIGILAR_QUESO') return null; // nunca en PERSEGUIR/SEGUIR_OLOR.
+  // v8: RONDA mira igual que VIGILAR_QUESO (hacia la entrada más cercana al
+  // queso que acaba de alcanzar, result.target). Nunca en PERSEGUIR/SEGUIR_OLOR.
+  if (result.mode !== 'VIGILAR_QUESO' && result.mode !== 'RONDA') return null;
 
   if (obs.cheese.length === 0) return giroLook(memory); // D3: sin nada que vigilar.
 
@@ -947,8 +1000,11 @@ function createBot(setup) {
   // Memoria del gato: sobrevive entre turnos para decidir (no solo para
   // loguear), a diferencia de modeHistory de abajo. `posiciones` es
   // DISENO_V5.md #4 (últimas 6, para no volver sobre olor viejo); `pickupKey`
-  // y `giro` son de v6 (mirar hacia la amenaza).
-  const catMemory = role === 'cat' ? { persecucionQueso: null, posiciones: [], pickupKey: null, giro: 0 } : null;
+  // y `giro` son de v6 (mirar hacia la amenaza); `visitas` y `rondaObjetivo`
+  // son de v8 (RONDA entre quesos).
+  const catMemory = role === 'cat'
+    ? { persecucionQueso: null, posiciones: [], pickupKey: null, giro: 0, visitas: new Map(), rondaObjetivo: null }
+    : null;
 
   // Memoria del ratón (DISENO_V5.md #2 y #1b): última vez que vio al gato,
   // el queso al que se comprometió en IR_AL_QUESO y el que acaba de soltar.
