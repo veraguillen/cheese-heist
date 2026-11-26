@@ -451,4 +451,25 @@ test('f) sin ningún queso en el piso: PATRULLA, no CENTINELA', () => {
   assert.equal(lastLog(sink).md, 'PATRULLA');
 });
 
-console.log('OK: los 27 casos forenses v11 pasaron.');
+test('init rápido en mapas grandes (~800 casillas): sin esto, timeout real contra Imanol', () => {
+  const width = 31;
+  const height = 29;
+  const rows = Array.from({ length: height }, (_, y) =>
+    Array.from({ length: width }, (_, x) =>
+      x === 0 || y === 0 || x === width - 1 || y === height - 1 ? '#' : '.'));
+  const holes = [];
+  for (let i = 0; i < 8; i++) {
+    const x = 1 + (i * 3) % (width - 2);
+    const top = i % 2 === 0;
+    const y = top ? 0 : height - 1;
+    rows[y][x] = 'H';
+    holes.push({ x, y, entrance: { x, y: top ? 1 : height - 2 } });
+  }
+  const map = { width, height, rows: rows.map((row) => row.join('')), holes };
+  const started = performance.now();
+  loadAct('cat', map);
+  const initMs = performance.now() - started;
+  assert.ok(initMs < 200, `init tardó ${initMs.toFixed(1)} ms en un mapa de ~${(width - 2) * (height - 2)} casillas -- antes del umbral bajado a 250, esto tardaba 35-47 ms local (y timeouteó en meow.tel)`);
+});
+
+console.log('OK: los 28 casos forenses v11 pasaron.');

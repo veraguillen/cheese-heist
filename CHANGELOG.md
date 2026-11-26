@@ -12,6 +12,7 @@ CHANGELOG — Midnight Kitchen bot
 | v6 | 24 nov. | Si el gato, quieto vigilando o emboscando, mira hacia el camino por donde llega el raton, lo ve antes del pickup mas seguido y bajan las entregas rivales, porque hoy mira hacia la entrada solo el 20 % de esos turnos. | Gato: look hacia la entrada del agujero mas cercano al queso (VIGILAR_QUESO) o hacia el pickup (EMBOSCADA) cuando hace STAY; giro N, E, S, W sin queso o ya en la entrada. Campo lk. El raton no cambia. | → | |
 | v14 | 26 nov. | Si el gato solo persigue al ratón visible a 4 casillas o menos y, más lejos, intercepta o patrulla, bajan las entregas rivales, porque deja de abandonar la zona de los quesos por un ratón que no alcanza. | Correa en PERSEGUIR (PERSEGUIR_MAX_DIST = 4, por camino) y gate mouseId < 0 en OLOR; el resto de los modos no cambia. | → | |
 | v15 | 26 nov. | Si el gato va a un punto que cubre a todos los quesos a la vez en vez de recorrerlos uno por uno, vuelve a ver antes al rival y bajan sus entregas, porque PATRULLA oscila entre candidatos cercanos sin asentarse. | CENTINELA (v10, restaurado): reemplaza a PATRULLA cuando hay queso en el piso -- va al punto que minimiza la distancia máxima a todos los quesos, cacheado por conjunto; al llegar, gira 360 (N,E,S,W) si no tiene señales del ratón. PATRULLA queda solo para cuando no hay ningún queso. | → | |
+| v16 | 26 nov. | Si el precálculo todos-contra-todos del gato solo corre en mapas chicos, se evitan timeouts de init completos en casas grandes, porque hoy ese precálculo se hace dos veces (gato y ratón) y en mapas de ~800 casillas tarda 35-47ms local -- cerca del límite de 500ms si el servidor es más lento. | Bajar el umbral de buildAllPairs (ALL_PAIRS_MAX_V) de 900 a 250 casillas; arriba de eso, el BFS cacheado por turno (ya en uso, medido en 2-6ms) reemplaza al precálculo. | → | |
 Formato de cada entrada
 vX — fecha
 Hipótesis: Si cambio X, espero que mejore Y porque Z.
@@ -111,7 +112,6 @@ Decisión: mantener (provisional, n = 3). Cumple el criterio de §8 en promedio 
 - **Resultado (contra Timothy / contra el resto):**
 - **Decisión:** mantener / ajustar / revertir
 
-
 ## v15 — 26 nov.
 - **Hipótesis:** Si el gato va a un punto que cubre a todos los quesos a la vez en vez de recorrerlos uno por uno, vuelve a ver antes al rival y bajan sus entregas, porque PATRULLA oscila entre candidatos cercanos sin asentarse.
 - **Cambio (uno solo):** CENTINELA (v10, restaurado): reemplaza a PATRULLA cuando hay queso en el piso -- va al punto que minimiza la distancia máxima a todos los quesos, cacheado por conjunto; al llegar, gira 360 (N,E,S,W) si no tiene señales del ratón. PATRULLA queda solo para cuando no hay ningún queso.
@@ -124,3 +124,14 @@ Decisión: mantener (provisional, n = 3). Cumple el criterio de §8 en promedio 
 - **Resultado (contra Timothy / contra el resto):**
 - **Decisión:** mantener / ajustar / revertir
 
+## v16 — 26 nov.
+- **Hipótesis:** Si el precálculo todos-contra-todos del gato solo corre en mapas chicos, se evitan timeouts de init completos en casas grandes, porque hoy ese precálculo se hace dos veces (gato y ratón) y en mapas de ~800 casillas tarda 35-47ms local -- cerca del límite de 500ms si el servidor es más lento.
+- **Cambio (uno solo):** Bajar el umbral de buildAllPairs (ALL_PAIRS_MAX_V) de 900 a 250 casillas; arriba de eso, el BFS cacheado por turno (ya en uso, medido en 2-6ms) reemplaza al precálculo.
+- **Por qué (qué vi en los datos):** Timeout real reportado contra Imanol en las dos piernas (init failed: timeout, ni el gato ni el ratón llegaban a jugar); medido localmente: mapas de ~800 casillas tardaban 35-47ms de init, bajó a 3-7ms con el nuevo umbral.
+- **Decidí yo:** Bajar el umbral en vez de optimizar buildAllPairs; elegí 250 con margen (a esa V el precálculo ya es barato) en vez de un número más ajustado.
+- **Sugirió la IA:** Midió el costo real por tamaño de mapa y confirmó que el camino de respaldo (BFS cacheado) es seguro por turno antes de bajar el umbral.
+- **Modelo / razonamiento:** Claude Sonnet 5 (Claude Code)
+- **Texto enviado en "What changed, and why?":** Lowered the all-pairs precompute threshold from 900 to 250 tiles: on houses around 800 tiles it was taking 35-47ms locally (x2, both roles build both graphs), likely timing out init on a slower server. The per-turn cached-BFS fallback is already fast enough (2-6ms) above that size.
+- **Qué observar en 10 partidas:** Si vuelven a aparecer timeouts de init contra cualquier rival; tiempo de init real reportado por el sitio en casas grandes.
+- **Resultado (contra Timothy / contra el resto):**
+- **Decisión:** mantener / ajustar / revertir

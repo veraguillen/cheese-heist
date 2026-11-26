@@ -286,8 +286,16 @@ function createBot(setup) {
     return { dist, firstStep };
   };
 
-  const catPairs = V <= 900 ? buildAllPairs(catGraph) : null;
-  const mousePairs = V <= 900 ? buildAllPairs(mouseGraph) : null;
+  // Umbral del precálculo todos-contra-todos: O(V^2), y se hace DOS veces
+  // (gato y ratón) en cada createBot, sin importar el rol. Medido: con
+  // V~800 (900 de margen) tarda 35-47 ms local -- cerca de los 500 ms de
+  // initTimeMs si el servidor de meow.tel es más lento que acá (timeouts de
+  // init reales contra Imanol, siempre en las dos piernas). Bajado a 250:
+  // local, el peor caso medido con V~800 sin este precálculo es 3-6 ms por
+  // turno con el BFS cacheado de respaldo, y el init baja a 3-5 ms.
+  const ALL_PAIRS_MAX_V = 250;
+  const catPairs = V <= ALL_PAIRS_MAX_V ? buildAllPairs(catGraph) : null;
+  const mousePairs = V <= ALL_PAIRS_MAX_V ? buildAllPairs(mouseGraph) : null;
   const bfsCache = new Map();
   const graphFor = (kind) => kind === 'cat' ? catGraph : mouseGraph;
   const pairsFor = (kind) => kind === 'cat' ? catPairs : mousePairs;
