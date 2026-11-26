@@ -352,14 +352,14 @@ test('a) ratón visible a 3 (dentro de la correa) -> PERSEGUIR', () => {
   assert.equal(d.lj, 0, 'a d=3 no debería marcarse la correa');
 });
 
-test('b) ratón visible a 7 (fuera de la correa) -> no PERSEGUIR, cae a PATRULLA', () => {
+test('b) ratón visible a 7 (fuera de la correa) -> no PERSEGUIR, cae a CENTINELA (hay queso)', () => {
   const { act, sink } = loadAct('cat', openHouse());
   const action = act(observation('cat', {
     turn: 1, you: { x: 2, y: 1 }, mouse: { x: 9, y: 1, carrying: false }, cheese: [[6, 6], [3, 9]],
   }));
   const d = lastLog(sink);
   assert.notEqual(d.md, 'PERSEGUIR', 'a d=7 no debería perseguir');
-  assert.equal(d.md, 'PATRULLA');
+  assert.equal(d.md, 'CENTINELA', 'con queso en el piso, el fallback es CENTINELA, no PATRULLA');
   assert.equal(d.lj, 1, 'debería marcar la correa activa');
   assert.notEqual(action.move, 'STAY', 'no debería quedarse quieto con quesos alcanzables');
 });
@@ -404,4 +404,51 @@ test('e) ratón visible pero inalcanzable (Infinity) -> PATRULLA, no STAY fijo',
   assert.notEqual(action.move, 'STAY', 'no debería congelarse con un queso alcanzable del otro lado de la pared');
 });
 
-console.log('OK: los 22 casos forenses v11 pasaron.');
+// ---------------------------------------------------------------- CENTINELA (v10, restaurado)
+test('a) CENTINELA: 2 quesos en extremos opuestos -> va hacia el centro', () => {
+  const { act, sink } = loadAct('cat', openHouse());
+  const action = act(observation('cat', {
+    turn: 1, you: { x: 1, y: 6 }, cheese: [[2, 2], [10, 10]],
+  }));
+  const d = lastLog(sink);
+  assert.equal(d.md, 'CENTINELA');
+  assert.equal(d.tg, '6,6', 'el centro de un cuarto simétrico 13x13 debería ser (6,6)');
+  assert.notEqual(action.move, 'STAY');
+});
+
+test('b) CENTINELA en el centro: STAY con look rotando N,E,S,W', () => {
+  const { act, sink } = loadAct('cat', openHouse());
+  const looks = [];
+  for (let t = 1; t <= 4; t++) {
+    act(observation('cat', { turn: t, you: { x: 6, y: 6 }, cheese: [[2, 2], [10, 10]] }));
+    const d = lastLog(sink);
+    assert.equal(d.md, 'CENTINELA');
+    looks.push(d.lk);
+  }
+  assert.deepEqual(looks, ['N', 'E', 'S', 'W'], 'el giro debería completar las 4 direcciones en orden');
+});
+
+test('c) CENTINELA recalcula cuando cambia el conjunto de quesos', () => {
+  const { act, sink } = loadAct('cat', openHouse());
+  act(observation('cat', { turn: 1, you: { x: 1, y: 6 }, cheese: [[2, 2], [10, 10]] }));
+  const tgAntes = lastLog(sink).tg;
+  act(observation('cat', { turn: 2, you: { x: 2, y: 6 }, cheese: [[2, 2], [5, 2]] }));
+  const tgDespues = lastLog(sink).tg;
+  assert.notEqual(tgAntes, tgDespues, 'con otro conjunto de quesos, el centro debería recalcularse');
+});
+
+test('d) CENTINELA con 1 solo queso: el centro es la casilla del queso', () => {
+  const { act, sink } = loadAct('cat', openHouse());
+  act(observation('cat', { turn: 1, you: { x: 1, y: 6 }, cheese: [[6, 6]] }));
+  const d = lastLog(sink);
+  assert.equal(d.md, 'CENTINELA');
+  assert.equal(d.tg, '6,6');
+});
+
+test('f) sin ningún queso en el piso: PATRULLA, no CENTINELA', () => {
+  const { act, sink } = loadAct('cat', openHouse());
+  act(observation('cat', { turn: 1, you: { x: 1, y: 6 }, cheese: [] }));
+  assert.equal(lastLog(sink).md, 'PATRULLA');
+});
+
+console.log('OK: los 27 casos forenses v11 pasaron.');

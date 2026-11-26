@@ -11,6 +11,7 @@ CHANGELOG — Midnight Kitchen bot
 | v5 | 24 nov. | Raton: si suelta el queso al huir sin ruta segura y recuerda al gato 10 turnos, bajan las capturas con queso y los turnos trabado. Gato: si solo embosca cuando llega antes y no repite olor de sus ultimas 6 casillas, cede menos entregas. | Raton: SOLTAR (1), ignorar el queso soltado con gato visto o recordado (1b), memoria del gato y compromiso con un queso (2). Gato: emboscada a tiempo (3), sin vaiven por olor (4). | → | |
 | v6 | 24 nov. | Si el gato, quieto vigilando o emboscando, mira hacia el camino por donde llega el raton, lo ve antes del pickup mas seguido y bajan las entregas rivales, porque hoy mira hacia la entrada solo el 20 % de esos turnos. | Gato: look hacia la entrada del agujero mas cercano al queso (VIGILAR_QUESO) o hacia el pickup (EMBOSCADA) cuando hace STAY; giro N, E, S, W sin queso o ya en la entrada. Campo lk. El raton no cambia. | → | |
 | v14 | 26 nov. | Si el gato solo persigue al ratón visible a 4 casillas o menos y, más lejos, intercepta o patrulla, bajan las entregas rivales, porque deja de abandonar la zona de los quesos por un ratón que no alcanza. | Correa en PERSEGUIR (PERSEGUIR_MAX_DIST = 4, por camino) y gate mouseId < 0 en OLOR; el resto de los modos no cambia. | → | |
+| v15 | 26 nov. | Si el gato va a un punto que cubre a todos los quesos a la vez en vez de recorrerlos uno por uno, vuelve a ver antes al rival y bajan sus entregas, porque PATRULLA oscila entre candidatos cercanos sin asentarse. | CENTINELA (v10, restaurado): reemplaza a PATRULLA cuando hay queso en el piso -- va al punto que minimiza la distancia máxima a todos los quesos, cacheado por conjunto; al llegar, gira 360 (N,E,S,W) si no tiene señales del ratón. PATRULLA queda solo para cuando no hay ningún queso. | → | |
 Formato de cada entrada
 vX — fecha
 Hipótesis: Si cambio X, espero que mejore Y porque Z.
@@ -107,6 +108,19 @@ Decisión: mantener (provisional, n = 3). Cumple el criterio de §8 en promedio 
 - **Modelo / razonamiento:** Claude Sonnet 5 (Claude Code)
 - **Texto enviado en "What changed, and why?":** Cat now chases a visible mouse only within 4 tiles; farther away it intercepts or patrols, because chasing from afar pulled it off the cheese and let rivals deliver. Mouse unchanged.
 - **Qué observar en 10 partidas:** Elo en 3 rondas; turnos con lj=1 y qué hace el gato después; entregas rivales y capturas por partida; rebotes (b) en PATRULLA.
+- **Resultado (contra Timothy / contra el resto):**
+- **Decisión:** mantener / ajustar / revertir
+
+
+## v15 — 26 nov.
+- **Hipótesis:** Si el gato va a un punto que cubre a todos los quesos a la vez en vez de recorrerlos uno por uno, vuelve a ver antes al rival y bajan sus entregas, porque PATRULLA oscila entre candidatos cercanos sin asentarse.
+- **Cambio (uno solo):** CENTINELA (v10, restaurado): reemplaza a PATRULLA cuando hay queso en el piso -- va al punto que minimiza la distancia máxima a todos los quesos, cacheado por conjunto; al llegar, gira 360 (N,E,S,W) si no tiene señales del ratón. PATRULLA queda solo para cuando no hay ningún queso.
+- **Por qué (qué vi en los datos):** PATRULLA, probado en sesiones anteriores, puede quedar oscilando entre dos candidatos cercanos sin cubrir el resto del mapa.
+- **Decidí yo:** Que convivan en vez de que CENTINELA reemplace a PATRULLA del todo; el gate con mode==='PATRULLA' en vez de target<0, porque OLOR siempre deja target en algo aunque no cruce su umbral.
+- **Sugirió la IA:** Detectó que target<0 casi nunca se cumple por el side-effect del scan de OLOR, y propuso el gate por mode.
+- **Modelo / razonamiento:** Claude Sonnet 5 (Claude Code)
+- **Texto enviado en "What changed, and why?":** Cat restores CENTINELA from v10: holds the tile that minimizes max distance to all cheese (one stable point), with a 360 look sweep when idle and signal-less, instead of patrolling cheese one by one. PATRULLA now only runs with no cheese at all.
+- **Qué observar en 10 partidas:** Entregas rivales y capturas por partida; turnos con md=CENTINELA y si el giro realmente ayuda a reencontrar al ratón; costo por turno cuando cambia el conjunto de quesos.
 - **Resultado (contra Timothy / contra el resto):**
 - **Decisión:** mantener / ajustar / revertir
 

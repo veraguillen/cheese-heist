@@ -531,6 +531,8 @@ function createBot(setup) {
     lastPickup: null,
     lastMouseSeen: null, // { x, y, turn, heading } -- última vista del ratón, para la mirada dirigida al perderlo
     lookCycle: 0, // turnos consecutivos sin ver al ratón (se resetea al volver a verlo)
+    centro: null, // { firma, key } -- centro cacheado de CENTINELA, por conjunto de quesos
+    centinelaGiroIdx: 0, // paso del giro 360 de CENTINELA sin señales
     lastMode: null,
     modeHistory: [],
     patrolTarget: -1,
@@ -730,6 +732,57 @@ function createBot(setup) {
     memory.lookCycle++;
     if (phase === 0 || phase === 2) return primary;
     return phase === 1 ? LEFT_OF[primary] : RIGHT_OF[primary];
+  };
+
+  /**
+   * Centro (v10, restaurado): la casilla del grafo del gato que minimiza la
+   * distancia MÁXIMA (BFS) a todos los quesos a la vez -- cubre a todos en
+   * vez de vigilar uno solo. Con 1 queso, el centro es su propia casilla.
+   * Cacheado por la firma de quesos (ordenados y unidos): no se recalcula
+   * mientras el conjunto no cambie. `distanceId('cat', q, c)` con el queso
+   * `q` primero (no la casilla `c`): así cachea una sola BFS por queso, no
+   * una por casilla candidata.
+   */
+  const calcularCentro = (cheeseIdsList, start) => {
+    const firma = [...cheeseIdsList].sort((a, b) => a - b).join('|');
+    if (memory.centro && memory.centro.firma === firma) return memory.centro.key;
+    let key = -1;
+    if (cheeseIdsList.length === 1) {
+      key = cheeseIdsList[0];
+    } else {
+      let mejor = null;
+      for (const c of floorIds) {
+        let maxDist = 0;
+        let suma = 0;
+        let alcanzable = true;
+        for (const q of cheeseIdsList) {
+          const d = distanceId('cat', q, c);
+          if (!Number.isFinite(d)) { alcanzable = false; break; }
+          if (d > maxDist) maxDist = d;
+          suma += d;
+        }
+        if (!alcanzable) continue; // esta casilla no ve a todos los quesos
+        const dGato = distanceId('cat', start, c);
+        if (
+          !mejor || maxDist < mejor.maxDist
+          || (maxDist === mejor.maxDist && suma < mejor.suma)
+          || (maxDist === mejor.maxDist && suma === mejor.suma && dGato < mejor.dGato)
+        ) {
+          mejor = { key: c, maxDist, suma, dGato };
+        }
+      }
+      key = mejor ? mejor.key : -1; // -1: ninguna casilla alcanza a todos los quesos a la vez
+    }
+    memory.centro = { firma, key };
+    return key;
+  };
+
+  const GIRO_CENTINELA = ['N', 'E', 'S', 'W'];
+  /** CENTINELA sin señales del ratón: gira la mirada 360° (N,E,S,W), un paso por turno, hasta encontrar algo. */
+  const centinelaGiro = () => {
+    const dir = GIRO_CENTINELA[memory.centinelaGiroIdx % 4];
+    memory.centinelaGiroIdx++;
+    return dir;
   };
 
   // --------------------------------------------- ratón (v7, restaurado)
@@ -1051,6 +1104,19 @@ function createBot(setup) {
         }
         if (maxBelief > 0.08) mode = 'OLOR';
       }
+      // CENTINELA (v10, restaurado): con queso en el piso y nada mejor que
+      // hacer, al punto que minimiza la distancia MÁXIMA a todos los quesos
+      // a la vez, en vez de recorrer agujero por agujero -- PATRULLA queda
+      // solo para cuando no hay ningún queso en el piso.
+      // Se gatea con mode === 'PATRULLA' (el default, intacto si nada de
+      // mayor prioridad disparó) y NO con target < 0: el bloque de OLOR de
+      // arriba siempre deja target en algo (el máximo de creencia, aunque
+      // no supere su propio umbral), así que target < 0 casi nunca se
+      // cumple acá -- target sí se pisa después, con el centro.
+      if (mode === 'PATRULLA' && cheeseIds.length > 0) {
+        const centro = calcularCentro(cheeseIds, start);
+        if (centro >= 0) { target = centro; mode = 'CENTINELA'; }
+      }
       if (target < 0 || target === start && mode === 'PATRULLA') {
         const candidateTargets = [];
         for (const hole of holes) candidateTargets.push(hole.entrance);
@@ -1109,7 +1175,14 @@ function createBot(setup) {
           decision.sprint = true;
         }
         const directed = directedLook(obs, start);
-        decision.look = directed || chooseLook(start, decision.move, visible);
+        // CENTINELA sin señales (ni visto ni olor ni creencia -- por eso
+        // llegó hasta acá en vez de PERSEGUIR/INTERCEPTAR/OLOR) y ya
+        // quieto en el centro: gira en vez de mirar siempre para el mismo
+        // lado. directedLook tiene prioridad si hay un rumbo reciente.
+        const giro = (!directed && mode === 'CENTINELA' && decision.move === 'STAY' && mouseId < 0 && obs.scent.length === 0)
+          ? centinelaGiro()
+          : null;
+        decision.look = directed || giro || chooseLook(start, decision.move, visible);
         decision.lm = toBit(Boolean(directed));
       } else {
         const fallback = DIRS.map((dir, d) => ({ dir, id: catGraph[start * 4 + d] }))
