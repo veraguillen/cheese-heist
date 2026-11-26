@@ -10,6 +10,7 @@ CHANGELOG — Midnight Kitchen bot
 | v3 | 24 nov. | Ratón: si el ratón con queso vuelve al agujero con más margen sobre el gato visible, en vez de al más cercano, espero que bajen las capturas con queso, porque en v2 el 90 % fueron volviendo, a 1 casilla del agujero. Gato: si el gato espera en la entrada del agujero más cercano al queso, en vez de sobre el queso, espero al menos 1 captura por partida y menos entregas de Timothy, porque en v2 pasó el 98 % del tiempo sobre el queso y vio al ratón en 5 de 1200 turnos. | Un cambio por rol. Ratón (R2): con queso y gato visible, elige el agujero con ruta segura de mayor margen. Gato (G2): EMBOSCADA reemplaza a VIGILAR_QUESO; espera en la entrada del agujero más cercano al queso y, tras un pickup, mantiene la entrada más cercana a ese lugar hasta un delivered, caught o dropped. Registro: campo mg y modo EMBOSCADA. | → | |
 | v5 | 24 nov. | Raton: si suelta el queso al huir sin ruta segura y recuerda al gato 10 turnos, bajan las capturas con queso y los turnos trabado. Gato: si solo embosca cuando llega antes y no repite olor de sus ultimas 6 casillas, cede menos entregas. | Raton: SOLTAR (1), ignorar el queso soltado con gato visto o recordado (1b), memoria del gato y compromiso con un queso (2). Gato: emboscada a tiempo (3), sin vaiven por olor (4). | → | |
 | v6 | 24 nov. | Si el gato, quieto vigilando o emboscando, mira hacia el camino por donde llega el raton, lo ve antes del pickup mas seguido y bajan las entregas rivales, porque hoy mira hacia la entrada solo el 20 % de esos turnos. | Gato: look hacia la entrada del agujero mas cercano al queso (VIGILAR_QUESO) o hacia el pickup (EMBOSCADA) cuando hace STAY; giro N, E, S, W sin queso o ya en la entrada. Campo lk. El raton no cambia. | → | |
+| v14 | 26 nov. | Si el gato solo persigue al ratón visible a 4 casillas o menos y, más lejos, intercepta o patrulla, bajan las entregas rivales, porque deja de abandonar la zona de los quesos por un ratón que no alcanza. | Correa en PERSEGUIR (PERSEGUIR_MAX_DIST = 4, por camino) y gate mouseId < 0 en OLOR; el resto de los modos no cambia. | → | |
 Formato de cada entrada
 vX — fecha
 Hipótesis: Si cambio X, espero que mejore Y porque Z.
@@ -96,3 +97,16 @@ Decisión: mantener (provisional, n = 3). Cumple el criterio de §8 en promedio 
 - **Qué observar en 10 partidas:** 
 - **Resultado (contra Timothy / contra el resto):**
 - **Decisión:** mantener / ajustar / revertir
+
+## v14 — 26 nov.
+- **Hipótesis:** Si el gato solo persigue al ratón visible a 4 casillas o menos y, más lejos, intercepta o patrulla, bajan las entregas rivales, porque deja de abandonar la zona de los quesos por un ratón que no alcanza.
+- **Cambio (uno solo):** Correa en PERSEGUIR (PERSEGUIR_MAX_DIST = 4, por camino) y gate mouseId < 0 en OLOR; el resto de los modos no cambia.
+- **Por qué (qué vi en los datos):** En v7 el gato duplicó las capturas pero dejó el queso y el rival entregó +0,94 veces más; PERSEGUIR no tenía umbral de distancia. Los gatos ganadores no persiguen de lejos.
+- **Decidí yo:** Probar la correa antes que el sprint con reserva; N = 4 provisional; el gate en OLOR en vez de excluir solo la casilla.
+- **Sugirió la IA:** El gate en OLOR para evitar que la creencia reabra la persecución, los tests a-e y el campo lj.
+- **Modelo / razonamiento:** Claude Sonnet 5 (Claude Code)
+- **Texto enviado en "What changed, and why?":** Cat now chases a visible mouse only within 4 tiles; farther away it intercepts or patrols, because chasing from afar pulled it off the cheese and let rivals deliver. Mouse unchanged.
+- **Qué observar en 10 partidas:** Elo en 3 rondas; turnos con lj=1 y qué hace el gato después; entregas rivales y capturas por partida; rebotes (b) en PATRULLA.
+- **Resultado (contra Timothy / contra el resto):**
+- **Decisión:** mantener / ajustar / revertir
+
