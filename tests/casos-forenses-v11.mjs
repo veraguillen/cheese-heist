@@ -179,6 +179,30 @@ test('gato: sprint alineado de dos casillas para cerrar captura', () => {
   assert.equal(action.sprint, true);
 });
 
+test('gato: sprint de remate a 1 casilla en línea recta (regresión v7)', () => {
+  const { act, sink } = loadAct('cat', openHouse());
+  const action = act(observation('cat', {
+    turn: 60,
+    you: { x: 5, y: 5, facing: 'E', stamina: 30 },
+    mouse: { x: 6, y: 5, carrying: false },
+    visible: [[6, 5]],
+  }));
+  assert.equal(lastLog(sink).md, 'PERSEGUIR');
+  assert.equal(action.move, 'E', 'no avanzó derecho hacia el ratón adyacente');
+  assert.equal(action.sprint, true, 'no pidió sprint a 1 casilla: el ratón podría volver a quedar siempre 1 casilla adelante caminando');
+});
+
+test('gato: sin estamina, no pide sprint de remate a 1 casilla', () => {
+  const { act } = loadAct('cat', openHouse());
+  const action = act(observation('cat', {
+    turn: 60,
+    you: { x: 5, y: 5, facing: 'E', stamina: 0 },
+    mouse: { x: 6, y: 5, carrying: false },
+    visible: [[6, 5]],
+  }));
+  assert.ok(!action.sprint, 'pidió sprint sin estamina suficiente');
+});
+
 test('fallback BFS cacheado funciona con más de 900 celdas', () => {
   const width = 35;
   const height = 30;
@@ -203,4 +227,181 @@ test('fallback BFS cacheado funciona con más de 900 celdas', () => {
   assert.ok(['N', 'S', 'E', 'W', 'STAY'].includes(action.move));
 });
 
-console.log('OK: los 8 casos forenses v11 pasaron.');
+// ---------------------------------------------------- mirada dirigida (v11)
+// Helper para primar dos vistas del ratón y establecer un heading antes de
+// perderlo de vista, sin arrastrar estado de los tests anteriores.
+function primedCat(sightings) {
+  const { act, sink } = loadAct('cat', openHouse());
+  for (const overrides of sightings) act(observation('cat', overrides));
+  return { act, sink };
+}
+
+test('a) sin memoria de ratón: look igual que antes (chooseLook genérico)', () => {
+  const { act, sink } = loadAct('cat', openHouse());
+  const action = act(observation('cat', {
+    turn: 50,
+    you: { x: 2, y: 1, facing: 'E', stamina: 30 },
+    events: [{ type: 'pickup', x: 9, y: 1 }],
+  }));
+  assert.equal(lastLog(sink).lm, 0, 'sin ninguna vista previa no debería haber memoria activa');
+  assert.equal(action.look, 'S', 'sin memoria, el look debería salir de chooseLook (igual que antes de esta sesión)');
+});
+
+test('b) ratón perdido con heading N: el ciclo alterna N y los costados', () => {
+  const { act, sink } = primedCat([
+    { turn: 10, you: { x: 6, y: 6 }, mouse: { x: 6, y: 6, carrying: false } },
+    { turn: 11, you: { x: 6, y: 6 }, mouse: { x: 6, y: 5, carrying: false } }, // dy=-1 -> heading N
+  ]);
+  const looks = [];
+  for (let t = 12; t <= 15; t++) {
+    act(observation('cat', { turn: t, you: { x: 6, y: 6 } }));
+    looks.push(lastLog(sink).lk);
+  }
+  assert.deepEqual(looks, ['N', 'W', 'N', 'E'], 'el ciclo debería ser heading, izquierda, heading, derecha');
+});
+
+test('c) pasados más de 8 turnos sin ver al ratón: vuelve al look genérico (lm=0)', () => {
+  const { act, sink } = primedCat([
+    { turn: 10, you: { x: 6, y: 6 }, mouse: { x: 6, y: 6, carrying: false } },
+    { turn: 11, you: { x: 6, y: 6 }, mouse: { x: 6, y: 5, carrying: false } },
+  ]);
+  let last;
+  for (let t = 12; t <= 20; t++) {
+    act(observation('cat', { turn: t, you: { x: 6, y: 6 } }));
+    last = lastLog(sink);
+  }
+  assert.equal(last.lm, 0, 'a los 9 turnos sin ver al ratón (>8) la memoria ya debería estar vencida');
+});
+
+test('d) la mirada dirigida no cambia move ni sprint (INTERCEPTAR)', () => {
+  const { act, sink } = primedCat([
+    { turn: 48, you: { x: 5, y: 1 }, mouse: { x: 7, y: 1, carrying: false } },
+    { turn: 49, you: { x: 5, y: 1 }, mouse: { x: 8, y: 1, carrying: false } }, // dx=1 -> heading E
+  ]);
+  const action = act(observation('cat', {
+    turn: 50,
+    you: { x: 2, y: 1, facing: 'E', stamina: 30 },
+    events: [{ type: 'pickup', x: 9, y: 1 }],
+  }));
+  const d = lastLog(sink);
+  assert.equal(d.md, 'INTERCEPTAR');
+  assert.equal(action.move, 'E', 'move debería ser igual al caso sin memoria (a)');
+  assert.equal(action.sprint, true, 'sprint debería ser igual al caso sin memoria (a)');
+  assert.equal(d.lm, 1, 'acá sí debería haber memoria activa');
+  assert.equal(action.look, 'E', 'con memoria, el look cambia a la dirección del heading (antes era S)');
+});
+
+test('e) ratón visto dos turnos sin moverse y luego perdido: conserva el heading', () => {
+  const { act, sink } = primedCat([
+    { turn: 10, you: { x: 6, y: 6 }, mouse: { x: 6, y: 4, carrying: false } }, // primera vista: sin heading previo
+    { turn: 11, you: { x: 6, y: 6 }, mouse: { x: 6, y: 5, carrying: false } }, // dy=+1 -> heading S
+    { turn: 12, you: { x: 6, y: 6 }, mouse: { x: 6, y: 5, carrying: false } }, // mismo lugar (delta 0,0): conserva S
+  ]);
+  act(observation('cat', { turn: 13, you: { x: 6, y: 6 } }));
+  const d = lastLog(sink);
+  assert.equal(d.lm, 1);
+  assert.equal(d.lk, 'S', 'el heading S debería conservarse pese al turno sin movimiento');
+});
+
+test('f) delta diagonal (2,1): usa el eje de mayor |delta| (x)', () => {
+  const { act, sink } = primedCat([
+    { turn: 10, you: { x: 6, y: 6 }, mouse: { x: 5, y: 5, carrying: false } },
+    { turn: 11, you: { x: 6, y: 6 }, mouse: { x: 7, y: 6, carrying: false } }, // dx=2, dy=1 -> eje x -> E
+  ]);
+  act(observation('cat', { turn: 12, you: { x: 6, y: 6 } }));
+  const d = lastLog(sink);
+  assert.equal(d.lm, 1);
+  assert.equal(d.lk, 'E', 'con |dx|=2 > |dy|=1, el heading debería ser E');
+});
+
+test('g) el primer turno sin ver al ratón mira a primary, no a un costado', () => {
+  const { act, sink } = primedCat([
+    { turn: 10, you: { x: 6, y: 6 }, mouse: { x: 6, y: 6, carrying: false } },
+    { turn: 11, you: { x: 6, y: 6 }, mouse: { x: 6, y: 5, carrying: false } }, // heading N
+  ]);
+  act(observation('cat', { turn: 12, you: { x: 6, y: 6 } })); // primer turno perdido
+  const d = lastLog(sink);
+  assert.equal(d.lk, 'N', 'el primer turno perdido debería usar primary (N), no un costado');
+});
+
+// --------------------------------------------------------- correa de PERSEGUIR (v11)
+// Pared completa sin puerta en x=6: separa la casa en dos mitades que no se
+// comunican por ningún camino -- para probar el caso "visible pero Infinity".
+function splitHouse() {
+  const width = 13;
+  const height = 13;
+  const rows = Array.from({ length: height }, (_, y) =>
+    Array.from({ length: width }, (_, x) =>
+      x === 0 || y === 0 || x === width - 1 || y === height - 1 ? '#' : '.'));
+  for (let y = 1; y < height - 1; y++) rows[y][6] = '#';
+  rows[0][1] = 'H';
+  return {
+    width, height, rows: rows.map((row) => row.join('')),
+    holes: [{ x: 1, y: 0, entrance: { x: 1, y: 1 } }],
+  };
+}
+
+test('a) ratón visible a 3 (dentro de la correa) -> PERSEGUIR', () => {
+  const { act, sink } = loadAct('cat', openHouse());
+  const action = act(observation('cat', {
+    turn: 1, you: { x: 2, y: 1 }, mouse: { x: 5, y: 1, carrying: false }, cheese: [[6, 6]],
+  }));
+  const d = lastLog(sink);
+  assert.equal(d.md, 'PERSEGUIR');
+  assert.equal(action.move, 'E');
+  assert.equal(d.lj, 0, 'a d=3 no debería marcarse la correa');
+});
+
+test('b) ratón visible a 7 (fuera de la correa) -> no PERSEGUIR, cae a PATRULLA', () => {
+  const { act, sink } = loadAct('cat', openHouse());
+  const action = act(observation('cat', {
+    turn: 1, you: { x: 2, y: 1 }, mouse: { x: 9, y: 1, carrying: false }, cheese: [[6, 6], [3, 9]],
+  }));
+  const d = lastLog(sink);
+  assert.notEqual(d.md, 'PERSEGUIR', 'a d=7 no debería perseguir');
+  assert.equal(d.md, 'PATRULLA');
+  assert.equal(d.lj, 1, 'debería marcar la correa activa');
+  assert.notEqual(action.move, 'STAY', 'no debería quedarse quieto con quesos alcanzables');
+});
+
+test('c) ratón visible a 7 con pickup reciente -> INTERCEPTAR (la correa no bloquea esto)', () => {
+  const { act, sink } = loadAct('cat', openHouse());
+  act(observation('cat', {
+    turn: 1, you: { x: 2, y: 1 }, cheese: [[6, 6]], events: [{ type: 'pickup', x: 9, y: 1 }],
+  }));
+  const action = act(observation('cat', {
+    turn: 2, you: { x: 2, y: 1 }, mouse: { x: 9, y: 1, carrying: false }, cheese: [[6, 6]],
+  }));
+  const d = lastLog(sink);
+  assert.equal(d.md, 'INTERCEPTAR');
+  assert.equal(d.lj, 1, 'el ratón sigue fuera de la correa aunque se intercepte por el pickup');
+  assert.equal(action.move, 'E');
+});
+
+test('d) sprintRemate a 1 y 2 sigue igual (la correa no lo toca)', () => {
+  const { act: act1 } = loadAct('cat', openHouse());
+  const a1 = act1(observation('cat', {
+    turn: 1, you: { x: 5, y: 5 }, mouse: { x: 6, y: 5, carrying: false }, visible: [[6, 5]],
+  }));
+  assert.equal(a1.move, 'E');
+  assert.equal(a1.sprint, true, 'remate a d=1 sin cambios');
+
+  const { act: act2 } = loadAct('cat', openHouse());
+  const a2 = act2(observation('cat', {
+    turn: 1, you: { x: 5, y: 5 }, mouse: { x: 7, y: 5, carrying: true }, visible: [[7, 5]],
+  }));
+  assert.equal(a2.move, 'E');
+  assert.equal(a2.sprint, true, 'remate a d=2 con queso sin cambios');
+});
+
+test('e) ratón visible pero inalcanzable (Infinity) -> PATRULLA, no STAY fijo', () => {
+  const { act, sink } = loadAct('cat', splitHouse());
+  const action = act(observation('cat', {
+    turn: 1, you: { x: 3, y: 6 }, mouse: { x: 9, y: 6, carrying: false }, cheese: [[3, 3], [9, 9]],
+  }));
+  const d = lastLog(sink);
+  assert.ok(['PATRULLA', 'INTERCEPTAR'].includes(d.md), `esperaba PATRULLA o INTERCEPTAR, salió ${d.md}`);
+  assert.notEqual(action.move, 'STAY', 'no debería congelarse con un queso alcanzable del otro lado de la pared');
+});
+
+console.log('OK: los 22 casos forenses v11 pasaron.');
