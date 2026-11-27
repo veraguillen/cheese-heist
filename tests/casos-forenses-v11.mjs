@@ -573,4 +573,82 @@ test('g2) sprint por radio: sprintCost aprendido tal que 2*sprintCost > maxStami
   assert.equal(lastLog(sink).sr, 0);
 });
 
-console.log('OK: los 36 casos forenses v11 pasaron.');
+// ----------------------------------------------------- intercepción predictiva
+// Pasillo de 1 casilla de ancho, largo, con el único agujero en una punta.
+function corridorHouse() {
+  const width = 10;
+  const height = 3;
+  const rows = Array.from({ length: height }, (_, y) =>
+    Array.from({ length: width }, (_, x) =>
+      y === 0 || y === height - 1 || x === 0 || x === width - 1 ? '#' : '.'));
+  rows[0][1] = 'H';
+  return { width, height, rows: rows.map((row) => row.join('')), holes: [{ x: 1, y: 0, entrance: { x: 1, y: 1 } }] };
+}
+// Pasillo angosto de 1 casilla que termina justo en la entrada de un agujero.
+function holeCorridorHouse() {
+  const width = 3;
+  const height = 6;
+  const rows = Array.from({ length: height }, () => Array(width).fill('#'));
+  for (let y = 1; y < height - 1; y++) rows[y][1] = '.';
+  rows[0][1] = 'H';
+  return { width, height, rows: rows.map((row) => row.join('')), holes: [{ x: 1, y: 0, entrance: { x: 1, y: 1 } }] };
+}
+
+test('a) intercepción predictiva: pasillo recto con heading conocido -> corta adelante', () => {
+  const { act, sink } = loadAct('cat', corridorHouse());
+  act(observation('cat', { turn: 1, you: { x: 2, y: 1 }, mouse: { x: 4, y: 1, carrying: false } }));
+  act(observation('cat', { turn: 2, you: { x: 2, y: 1 }, mouse: { x: 5, y: 1, carrying: false } }));
+  const d = lastLog(sink);
+  assert.equal(d.md, 'PERSEGUIR');
+  assert.equal(d.pi, 1, 'con heading E en un pasillo recto, debería predecir adelante');
+  assert.notEqual(d.tg, '5,1', 'el target no debería ser la casilla actual del ratón');
+});
+
+test('b) intercepción predictiva: cuarto abierto -> sin predicción (persigue la casilla actual)', () => {
+  const { act, sink } = loadAct('cat', openHouse());
+  act(observation('cat', { turn: 1, you: { x: 3, y: 6 }, mouse: { x: 5, y: 6, carrying: false } }));
+  act(observation('cat', { turn: 2, you: { x: 3, y: 6 }, mouse: { x: 6, y: 6, carrying: false } }));
+  const d = lastLog(sink);
+  assert.equal(d.md, 'PERSEGUIR');
+  assert.equal(d.pi, 0, 'en un cuarto abierto (grado != 2) no debería confiar en la predicción');
+  assert.equal(d.tg, '6,6', 'el target debería ser la casilla actual del ratón');
+});
+
+test('c) intercepción predictiva: sin heading (primera vista) -> persigue la casilla actual', () => {
+  const { act, sink } = loadAct('cat', openHouse());
+  act(observation('cat', { turn: 1, you: { x: 3, y: 6 }, mouse: { x: 6, y: 6, carrying: false } }));
+  const d = lastLog(sink);
+  assert.equal(d.pi, 0);
+  assert.equal(d.tg, '6,6');
+});
+
+test('d) intercepción predictiva: el pasillo termina en un agujero -> corta la entrada', () => {
+  const { act, sink } = loadAct('cat', holeCorridorHouse());
+  act(observation('cat', { turn: 1, you: { x: 1, y: 4 }, mouse: { x: 1, y: 4, carrying: false } }));
+  act(observation('cat', { turn: 2, you: { x: 1, y: 4 }, mouse: { x: 1, y: 3, carrying: false } }));
+  const d = lastLog(sink);
+  assert.equal(d.pi, 1);
+  assert.equal(d.tg, '1,1', 'debería cortar en la entrada, no en el agujero mismo');
+});
+
+test('e) intercepción predictiva: sprintRemate sigue mirando la posición real del ratón', () => {
+  const { act, sink } = loadAct('cat', corridorHouse());
+  act(observation('cat', { turn: 1, you: { x: 2, y: 1 }, mouse: { x: 4, y: 1, carrying: false } }));
+  const action = act(observation('cat', { turn: 2, you: { x: 2, y: 1 }, mouse: { x: 3, y: 1, carrying: false } }));
+  const d = lastLog(sink);
+  assert.equal(d.pi, 1, 'el target de la ruta sigue siendo predictivo (apunta a la entrada)');
+  assert.equal(action.move, 'E');
+  assert.equal(action.sprint, true, 'a d=1 real del ratón, sprintRemate debería disparar igual, sin importar el target predicho');
+});
+
+test('f) intercepción predictiva: con varios quesos en el piso no cambia nada', () => {
+  const { act, sink } = loadAct('cat', corridorHouse());
+  act(observation('cat', { turn: 1, you: { x: 2, y: 1 }, mouse: { x: 4, y: 1, carrying: false }, cheese: [[5, 1]] }));
+  const action = act(observation('cat', { turn: 2, you: { x: 2, y: 1 }, mouse: { x: 5, y: 1, carrying: false }, cheese: [[5, 1], [3, 1]] }));
+  const d = lastLog(sink);
+  assert.equal(d.md, 'PERSEGUIR');
+  assert.equal(d.pi, 1);
+  assert.notEqual(action.move, 'STAY');
+});
+
+console.log('OK: los 42 casos forenses v11 pasaron.');

@@ -115,7 +115,7 @@ function toBit(value) {
  * puede valer "ALEJARSE" desde v2 (DISENO_V2.md §5), "EMBOSCADA" desde v3 o
  * "SOLTAR" desde v5 (DISENO_V5.md §1).
  */
-function buildLogFields(obs, role, mode, prevMode, bounce, target, dist, catDist, deviated, margin, gatoRecordado, quesoIgnorado, look, sprintPedido, quesosDescartados, lookMemoria, leashed, sprintRadio) {
+function buildLogFields(obs, role, mode, prevMode, bounce, target, dist, catDist, deviated, margin, gatoRecordado, quesoIgnorado, look, sprintPedido, quesosDescartados, lookMemoria, leashed, sprintRadio, predictivo) {
   const isMouse = role === 'mouse';
   const common = {
     v: 11,
@@ -168,6 +168,10 @@ function buildLogFields(obs, role, mode, prevMode, bounce, target, dist, catDist
         // sr: 1 si el sprint de este turno salió del sprint por radio
         // (con queso, dentro de SPRINT_RADIO_MAX_DIST, línea recta).
         sr: sprintRadio === undefined ? 0 : sprintRadio,
+        // pi: 1 si el target de PERSEGUIR salió de la intercepción
+        // predictiva (un punto de corte adelante del rumbo), no de la
+        // casilla actual del ratón.
+        pi: predictivo === undefined ? 0 : predictivo,
       };
   return { ...common, ...roleFields };
 }
@@ -493,6 +497,7 @@ function createBot(setup) {
   const LOOK_MEMORY_TURNS = 8; // turnos sin ver al ratón en los que vale la pena barrer hacia donde se fue, antes de volver al look genérico (valor inicial, provisional)
   const PERSEGUIR_MAX_DIST = 4; // correa de PERSEGUIR: más lejos que esto (o sin camino), perseguir a un ratón visible pero inalcanzable deja la zona de los quesos sin cubrir por nada (valor inicial, provisional)
   const SPRINT_RADIO_MAX_DIST = 4; // sprint por radio con el ratón cargado: no tiene sentido pedirlo a un ratón al que ya no se persigue, así que no puede superar PERSEGUIR_MAX_DIST (valor inicial, provisional)
+  const PREDICT_STEPS = 3; // intercepción predictiva en PERSEGUIR: hasta cuántas casillas adelante, siguiendo el rumbo, mientras el pasillo no tenga bifurcaciones (valor inicial, provisional)
 
   // RATÓN (v7, restaurado -- ver analysis/salida/v7_vs_v6.txt y DISENO_V5.md).
   const MEMORIA_GATO = 10; // turnos sin ver al gato que siguen contando como si lo viera (DISENO_V5.md §2)
@@ -744,6 +749,45 @@ function createBot(setup) {
     memory.lookCycle++;
     if (phase === 0 || phase === 2) return primary;
     return phase === 1 ? LEFT_OF[primary] : RIGHT_OF[primary];
+  };
+
+  /**
+   * Intercepción predictiva en PERSEGUIR: en vez de ir derecho a la casilla
+   * actual del ratón, si su rumbo (el mismo heading de directedLook) sigue
+   * un pasillo sin bifurcaciones, corta hasta PREDICT_STEPS casillas más
+   * adelante en esa dirección -- mientras lo persigue en línea recta,
+   * tailing nunca lo alcanza sin sprint; cortar unas casillas adelante sí
+   * puede. Se frena en la primera casilla de grado != 2 en mouseGraph (no
+   * es un pasillo simple: bifurcación o punta ciega, ahí el ratón puede
+   * elegir otro camino y seguir prediciendo ya no es confiable). Si el
+   * pasillo termina en un agujero, corta la entrada (el gato no puede
+   * entrar, pero sí puede esperar ahí) en vez de perseguir el agujero
+   * mismo. Sin rumbo, o si el primer paso ya no es posible, devuelve
+   * mouseId sin cambios -- igual que antes de este cambio.
+   */
+  const predictInterceptTarget = (mouseId, heading) => {
+    if (!heading) return mouseId;
+    const dirIndex = DIRS.indexOf(heading);
+    let current = mouseId;
+    let predicted = mouseId;
+    for (let step = 0; step < PREDICT_STEPS; step++) {
+      // Grado de la casilla ANTES de dar el paso: si ya no es un pasillo
+      // simple (bifurcación, punta ciega, o el ratón ya está en un cuarto
+      // abierto desde el principio), no confío en seguir extendiendo desde
+      // acá -- ni siquiera el primer paso.
+      let degree = 0;
+      for (let d = 0; d < 4; d++) if (mouseGraph[current * 4 + d] >= 0) degree++;
+      if (degree !== 2) break;
+      const next = mouseGraph[current * 4 + dirIndex];
+      if (next < 0) break; // pared: no se puede seguir en esa dirección
+      if (chars[next] === 'H') {
+        const hole = holes.find((h) => h.id === next);
+        return hole ? hole.entrance : predicted;
+      }
+      predicted = next;
+      current = next;
+    }
+    return predicted;
   };
 
   /**
@@ -1086,8 +1130,12 @@ function createBot(setup) {
       const lj = toBit(mouseId >= 0 && catToMouseDist > PERSEGUIR_MAX_DIST);
       let target = -1;
       let mode = 'PATRULLA';
+      let pi = 0;
       if (mouseId >= 0 && catToMouseDist <= PERSEGUIR_MAX_DIST) {
-        target = mouseId;
+        const predicted = predictInterceptTarget(mouseId, memory.lastMouseSeen ? memory.lastMouseSeen.heading : null);
+        const predictedOk = predicted !== mouseId && Number.isFinite(distanceId('cat', start, predicted));
+        target = predictedOk ? predicted : mouseId;
+        pi = toBit(predictedOk);
         mode = 'PERSEGUIR';
       } else if (memory.lastPickup && obs.turn - memory.lastPickup.turn <= PICKUP_MEMORY_TURNS) {
         const pickup = memory.lastPickup.id;
@@ -1234,6 +1282,7 @@ function createBot(setup) {
         mouseBelief[mouseId] = 1;
       }
       decision.lj = lj;
+      decision.pi = pi;
     } else {
       recordarGatoVisto(obs);
       const { id: catId, gm } = gatoEfectivo(obs);
@@ -1300,7 +1349,7 @@ function createBot(setup) {
     const logLine = buildLogFields(
       obs, role, decision.mode, previousMode, bounce, decision.target, decision.dist,
       decision.catDist, decision.deviated, decision.margin, decision.gm, decision.qs,
-      decision.look, decision.sp, decision.rb, decision.lm, decision.lj, decision.sr,
+      decision.look, decision.sp, decision.rb, decision.lm, decision.lj, decision.sr, decision.pi,
     );
     console.log('D|' + JSON.stringify(logLine));
     const action = {
