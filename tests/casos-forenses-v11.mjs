@@ -713,4 +713,112 @@ test('f) intercepción predictiva: con varios quesos en el piso no cambia nada',
   assert.notEqual(action.move, 'STAY');
 });
 
-console.log('OK: los 45 casos forenses v11 pasaron.');
+// ------------------------------------------ intercepción predictiva: bifurcaciones (v21)
+// Pasillo horizontal que llega a una bifurcación en Y (sigue derecho al
+// este, y además una rama angosta hacia el norte que no sigue el rumbo).
+function yHouse() {
+  return {
+    width: 9,
+    height: 4,
+    rows: [
+      '#########',
+      '#####.###',
+      '#.......#',
+      '#########',
+    ],
+    holes: [],
+  };
+}
+// Misma bifurcación en Y, pero la rama recta (este) termina en un agujero.
+function yHoleHouse() {
+  return {
+    width: 10,
+    height: 4,
+    rows: [
+      '##########',
+      '#####.####',
+      '#.......H#',
+      '##########',
+    ],
+    holes: [{ x: 8, y: 2, entrance: { x: 7, y: 2 } }],
+  };
+}
+// Bifurcación sin ninguna rama recta en el rumbo (solo norte y sur): nada
+// "claro" para elegir.
+function bifurcacionSinRectaHouse() {
+  return {
+    width: 5,
+    height: 5,
+    rows: [
+      '#####',
+      '###.#',
+      '#...#',
+      '###.#',
+      '#####',
+    ],
+    holes: [],
+  };
+}
+// Bifurcación en Y cuya rama recta se abre de inmediato a un cuarto (grado
+// > 2 apenas un paso adentro): no es una rama angosta confiable.
+function bifurcacionCuartoHouse() {
+  return {
+    width: 8,
+    height: 5,
+    rows: [
+      '########',
+      '###....#',
+      '#......#',
+      '####...#',
+      '########',
+    ],
+    holes: [],
+  };
+}
+
+test('g) bifurcación en Y: rama recta en el rumbo y angosta -> la sigue', () => {
+  const { act, sink } = loadAct('cat', yHouse());
+  act(observation('cat', { turn: 1, you: { x: 2, y: 2 }, mouse: { x: 4, y: 2, carrying: false } }));
+  act(observation('cat', { turn: 2, you: { x: 2, y: 2 }, mouse: { x: 5, y: 2, carrying: false } }));
+  const d = lastLog(sink);
+  assert.equal(d.md, 'PERSEGUIR');
+  assert.equal(d.pi, 1, 'con heading E y una rama recta angosta en la bifurcación, debería seguirla');
+  assert.notEqual(d.tg, '5,2', 'el target no debería ser la casilla actual del ratón (la bifurcación)');
+});
+
+test('h) bifurcación sin rama recta en el rumbo -> conservador (persigue la casilla actual)', () => {
+  const { act, sink } = loadAct('cat', bifurcacionSinRectaHouse());
+  act(observation('cat', { turn: 1, you: { x: 1, y: 2 }, mouse: { x: 2, y: 2, carrying: false } }));
+  act(observation('cat', { turn: 2, you: { x: 1, y: 2 }, mouse: { x: 3, y: 2, carrying: false } }));
+  const d = lastLog(sink);
+  assert.equal(d.pi, 0, 'sin ninguna rama recta en el rumbo (solo norte y sur), no hay nada "claro" que elegir');
+  assert.equal(d.tg, '3,2', 'debería quedarse con la casilla actual del ratón');
+});
+
+test('i) bifurcación cuya rama recta se abre a un cuarto -> no la selecciona (conservador)', () => {
+  const { act, sink } = loadAct('cat', bifurcacionCuartoHouse());
+  act(observation('cat', { turn: 1, you: { x: 1, y: 2 }, mouse: { x: 2, y: 2, carrying: false } }));
+  act(observation('cat', { turn: 2, you: { x: 1, y: 2 }, mouse: { x: 3, y: 2, carrying: false } }));
+  const d = lastLog(sink);
+  assert.equal(d.pi, 0, 'la rama recta abre de inmediato a un cuarto (grado > 2): no es una rama angosta confiable');
+  assert.equal(d.tg, '3,2', 'debería quedarse con la casilla actual del ratón, no inventar una rama hacia el cuarto');
+});
+
+test('j) bifurcación en Y próxima a un agujero -> corta la entrada, no el agujero', () => {
+  const { act, sink } = loadAct('cat', yHoleHouse());
+  act(observation('cat', { turn: 1, you: { x: 2, y: 2 }, mouse: { x: 4, y: 2, carrying: false } }));
+  act(observation('cat', { turn: 2, you: { x: 2, y: 2 }, mouse: { x: 5, y: 2, carrying: false } }));
+  const d = lastLog(sink);
+  assert.equal(d.pi, 1);
+  assert.equal(d.tg, '7,2', 'debería cortar en la entrada del agujero, nunca en el agujero mismo');
+});
+
+test('k) bifurcación: ratón sin rumbo conocido (primera vista) -> no inventa un rumbo', () => {
+  const { act, sink } = loadAct('cat', yHouse());
+  act(observation('cat', { turn: 1, you: { x: 2, y: 2 }, mouse: { x: 5, y: 2, carrying: false } }));
+  const d = lastLog(sink);
+  assert.equal(d.pi, 0, 'sin ninguna vista anterior, no hay heading: no debe inventar un rumbo en la bifurcación');
+  assert.equal(d.tg, '5,2');
+});
+
+console.log('OK: los 50 casos forenses v11 pasaron.');

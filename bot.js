@@ -766,29 +766,43 @@ function createBot(setup) {
    * un pasillo sin bifurcaciones, corta hasta PREDICT_STEPS casillas más
    * adelante en esa dirección -- mientras lo persigue en línea recta,
    * tailing nunca lo alcanza sin sprint; cortar unas casillas adelante sí
-   * puede. Se frena en la primera casilla de grado != 2 en mouseGraph (no
-   * es un pasillo simple: bifurcación o punta ciega, ahí el ratón puede
-   * elegir otro camino y seguir prediciendo ya no es confiable). Si el
-   * pasillo termina en un agujero, corta la entrada (el gato no puede
-   * entrar, pero sí puede esperar ahí) en vez de perseguir el agujero
-   * mismo. Sin rumbo, o si el primer paso ya no es posible, devuelve
-   * mouseId sin cambios -- igual que antes de este cambio.
+   * puede. Si el pasillo termina en un agujero, corta la entrada (el gato
+   * no puede entrar, pero sí puede esperar ahí) en vez de perseguir el
+   * agujero mismo. Sin rumbo, devuelve mouseId sin cambios.
+   *
+   * Bifurcación (v21): en una casilla de grado > 2, el rumbo por sí solo ya
+   * no identifica un único camino (mouseBelief no sirve acá -- está
+   * colapsada 1.0 en la casilla exacta del ratón mientras lo vemos, sin
+   * diferenciar ramas, porque updateMouseBelief la recolapsa cada turno que
+   * hay obs.mouse). La única señal con la que sí se puede decidir es si el
+   * propio rumbo sigue siendo una rama legal Y esa rama continúa como
+   * pasillo angosto (grado <= 1 vista desde la rama, igual que como grado 2
+   * o menos tras dar el paso) -- eso descarta un cuarto abierto, donde
+   * cualquier dirección suele estar libre pero la casilla siguiente sigue
+   * siendo igual de abierta. Sin esa rama clara, se frena igual que antes
+   * (punta ciega, cuarto abierto, o casilla aislada).
    */
   const predictInterceptTarget = (mouseId, heading) => {
     if (!heading) return mouseId;
     const dirIndex = DIRS.indexOf(heading);
+    const degreeOf = (id) => {
+      let degree = 0;
+      for (let d = 0; d < 4; d++) if (mouseGraph[id * 4 + d] >= 0) degree++;
+      return degree;
+    };
     let current = mouseId;
     let predicted = mouseId;
     for (let step = 0; step < PREDICT_STEPS; step++) {
-      // Grado de la casilla ANTES de dar el paso: si ya no es un pasillo
-      // simple (bifurcación, punta ciega, o el ratón ya está en un cuarto
-      // abierto desde el principio), no confío en seguir extendiendo desde
-      // acá -- ni siquiera el primer paso.
-      let degree = 0;
-      for (let d = 0; d < 4; d++) if (mouseGraph[current * 4 + d] >= 0) degree++;
-      if (degree !== 2) break;
+      const degree = degreeOf(current);
       const next = mouseGraph[current * 4 + dirIndex];
-      if (next < 0) break; // pared: no se puede seguir en esa dirección
+      if (degree === 2) {
+        if (next < 0) break; // pasillo que dobla: sin rumbo recto, me rindo
+      } else if (degree > 2 && next >= 0 && degreeOf(next) <= 2) {
+        // Bifurcación con una rama clara en el rumbo, que además sigue
+        // angosta -- se toma esa rama, igual de confianza que un pasillo.
+      } else {
+        break; // punta ciega, casilla aislada, cuarto abierto, o sin rama clara en el rumbo
+      }
       if (chars[next] === 'H') {
         const hole = holes.find((h) => h.id === next);
         return hole ? hole.entrance : predicted;
