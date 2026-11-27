@@ -13,6 +13,7 @@ CHANGELOG — Midnight Kitchen bot
 | v14 | 26 nov. | Si el gato solo persigue al ratón visible a 4 casillas o menos y, más lejos, intercepta o patrulla, bajan las entregas rivales, porque deja de abandonar la zona de los quesos por un ratón que no alcanza. | Correa en PERSEGUIR (PERSEGUIR_MAX_DIST = 4, por camino) y gate mouseId < 0 en OLOR; el resto de los modos no cambia. | → | |
 | v15 | 26 nov. | Si el gato va a un punto que cubre a todos los quesos a la vez en vez de recorrerlos uno por uno, vuelve a ver antes al rival y bajan sus entregas, porque PATRULLA oscila entre candidatos cercanos sin asentarse. | CENTINELA (v10, restaurado): reemplaza a PATRULLA cuando hay queso en el piso -- va al punto que minimiza la distancia máxima a todos los quesos, cacheado por conjunto; al llegar, gira 360 (N,E,S,W) si no tiene señales del ratón. PATRULLA queda solo para cuando no hay ningún queso. | → | |
 | v16 | 26 nov. | Si el precálculo todos-contra-todos del gato solo corre en mapas chicos, se evitan timeouts de init completos en casas grandes, porque hoy ese precálculo se hace dos veces (gato y ratón) y en mapas de ~800 casillas tarda 35-47ms local -- cerca del límite de 500ms si el servidor es más lento. | Bajar el umbral de buildAllPairs (ALL_PAIRS_MAX_V) de 900 a 250 casillas; arriba de eso, el BFS cacheado por turno (ya en uso, medido en 2-6ms) reemplaza al precálculo. | → | |
+| v17 | 26 nov. | Si el gato sprinta con el ratón visible cargando queso, dentro de 4 casillas por camino y con los dos primeros pasos en línea recta, suben las capturas con queso, porque hoy el sprint solo se usa a 1-2 casillas alineado y la correa ya limita la persecución a 4. | SPRINT_RADIO_MAX_DIST = 4 (<= PERSEGUIR_MAX_DIST): sprint con ratón visible cargando queso, dentro del radio, primeros 2 pasos rectos y estamina >= 2*sprintCost. Gateado por decision.mode==='PERSEGUIR'; sprintRemate, INTERCEPTAR, OLOR, CENTINELA y el ratón no cambian. | → | |
 Formato de cada entrada
 vX — fecha
 Hipótesis: Si cambio X, espero que mejore Y porque Z.
@@ -133,5 +134,17 @@ Decisión: mantener (provisional, n = 3). Cumple el criterio de §8 en promedio 
 - **Modelo / razonamiento:** Claude Sonnet 5 (Claude Code)
 - **Texto enviado en "What changed, and why?":** Lowered the all-pairs precompute threshold from 900 to 250 tiles: on houses around 800 tiles it was taking 35-47ms locally (x2, both roles build both graphs), likely timing out init on a slower server. The per-turn cached-BFS fallback is already fast enough (2-6ms) above that size.
 - **Qué observar en 10 partidas:** Si vuelven a aparecer timeouts de init contra cualquier rival; tiempo de init real reportado por el sitio en casas grandes.
+- **Resultado (contra Timothy / contra el resto):**
+- **Decisión:** mantener / ajustar / revertir
+
+## v17 — 26 nov.
+- **Hipótesis:** Si el gato sprinta con el ratón visible cargando queso, dentro de 4 casillas por camino y con los dos primeros pasos en línea recta, suben las capturas con queso, porque hoy el sprint solo se usa a 1-2 casillas alineado y la correa ya limita la persecución a 4.
+- **Cambio (uno solo):** SPRINT_RADIO_MAX_DIST = 4 (<= PERSEGUIR_MAX_DIST): sprint con ratón visible cargando queso, dentro del radio, primeros 2 pasos rectos y estamina >= 2*sprintCost. Gateado por decision.mode==='PERSEGUIR'; sprintRemate, INTERCEPTAR, OLOR, CENTINELA y el ratón no cambian.
+- **Por qué (qué vi en los datos):** El sprint solo se usaba en la ventana angosta de sprintRemate (1-2 casillas); la correa (v14) ya garantiza que PERSEGUIR nunca persigue de más lejos de lo razonable, así que ampliar el sprint hasta ese mismo radio no agrega riesgo nuevo.
+- **Decidí yo:** Reserva A (2*sprintCost) sin bandera de "aprendido" -- si el juego no deja sprintar de verdad, RULES.md hace que el sprint mueva 1 sola casilla, inofensivo.
+- **Sugirió la IA:** Detectó que, sin la condición explícita de modo, el chequeo podía solaparse con el atajo de INTERCEPTAR; y el reuso de sprintLines para el chequeo de línea recta, sin estructuras nuevas.
+- **Modelo / razonamiento:** Claude Sonnet 5 (Claude Code)
+- **Texto enviado en "What changed, and why?":** Cat now also sprints at a visible, cheese-carrying mouse within 4 tiles when the first two path steps are straight and stamina covers 2x the learned sprint cost, because the leash already limits chasing to 4 tiles and sprint was only used at 1-2 tiles aligned. PERSEGUIR-gated only; mouse, OLOR, INTERCEPTAR, and PATRULLA unchanged.
+- **Qué observar en 10 partidas:** Capturas con queso por partida; turnos con sr=1 y si terminan en captura o entrega; si sprintCost sigue aprendiéndose razonable con este sprint nuevo de por medio.
 - **Resultado (contra Timothy / contra el resto):**
 - **Decisión:** mantener / ajustar / revertir

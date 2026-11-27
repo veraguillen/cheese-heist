@@ -115,7 +115,7 @@ function toBit(value) {
  * puede valer "ALEJARSE" desde v2 (DISENO_V2.md §5), "EMBOSCADA" desde v3 o
  * "SOLTAR" desde v5 (DISENO_V5.md §1).
  */
-function buildLogFields(obs, role, mode, prevMode, bounce, target, dist, catDist, deviated, margin, gatoRecordado, quesoIgnorado, look, sprintPedido, quesosDescartados, lookMemoria, leashed) {
+function buildLogFields(obs, role, mode, prevMode, bounce, target, dist, catDist, deviated, margin, gatoRecordado, quesoIgnorado, look, sprintPedido, quesosDescartados, lookMemoria, leashed, sprintRadio) {
   const isMouse = role === 'mouse';
   const common = {
     v: 11,
@@ -165,6 +165,9 @@ function buildLogFields(obs, role, mode, prevMode, bounce, target, dist, catDist
         // lj (correa de PERSEGUIR): 1 si había ratón visible a más de
         // PERSEGUIR_MAX_DIST (o inalcanzable) y no se lo persiguió.
         lj: leashed === undefined ? 0 : leashed,
+        // sr: 1 si el sprint de este turno salió del sprint por radio
+        // (con queso, dentro de SPRINT_RADIO_MAX_DIST, línea recta).
+        sr: sprintRadio === undefined ? 0 : sprintRadio,
       };
   return { ...common, ...roleFields };
 }
@@ -489,6 +492,7 @@ function createBot(setup) {
   const PATROL_HOLD_TURNS = 8; // turnos que el gato se compromete con el mismo objetivo de patrulla
   const LOOK_MEMORY_TURNS = 8; // turnos sin ver al ratón en los que vale la pena barrer hacia donde se fue, antes de volver al look genérico (valor inicial, provisional)
   const PERSEGUIR_MAX_DIST = 4; // correa de PERSEGUIR: más lejos que esto (o sin camino), perseguir a un ratón visible pero inalcanzable deja la zona de los quesos sin cubrir por nada (valor inicial, provisional)
+  const SPRINT_RADIO_MAX_DIST = 4; // sprint por radio con el ratón cargado: no tiene sentido pedirlo a un ratón al que ya no se persigue, así que no puede superar PERSEGUIR_MAX_DIST (valor inicial, provisional)
 
   // RATÓN (v7, restaurado -- ver analysis/salida/v7_vs_v6.txt y DISENO_V5.md).
   const MEMORIA_GATO = 10; // turnos sin ver al gato que siguen contando como si lo viera (DISENO_V5.md §2)
@@ -1169,6 +1173,22 @@ function createBot(setup) {
             decision.sp = remate.d;
           }
         }
+        // Sprint por radio (con queso, dentro de SPRINT_RADIO_MAX_DIST,
+        // primeros dos pasos en línea recta): reserva de 2*sprintCost en
+        // vez de 1 -- sprintRemate ya puede necesitar un sprint más para
+        // cerrar la captura, y si sprintCost todavía está en su valor por
+        // defecto (sin aprender), pedir de más acá no empeora nada: sin
+        // estamina real, RULES.md hace que el sprint mueva 1 sola casilla.
+        if (!sprint && decision.mode === 'PERSEGUIR' && mouseId >= 0 && obs.mouse.carrying
+            && catToMouseDist <= SPRINT_RADIO_MAX_DIST
+            && obs.you.stamina >= 2 * memory.houseParams.sprintCost) {
+          const firstDir = DIRS.indexOf(route.move);
+          if (route.path.length >= 3 && sprintLines[start * 4 + firstDir] === route.path[2]) {
+            sprint = true;
+            sprintDir = firstDir;
+            decision.sr = 1;
+          }
+        }
         if (!sprint && mode === 'INTERCEPTAR' && route.dist >= 2 && hasSprintStamina) {
           const firstDir = DIRS.indexOf(route.move);
           const sprintEnd = sprintLines[start * 4 + firstDir];
@@ -1280,7 +1300,7 @@ function createBot(setup) {
     const logLine = buildLogFields(
       obs, role, decision.mode, previousMode, bounce, decision.target, decision.dist,
       decision.catDist, decision.deviated, decision.margin, decision.gm, decision.qs,
-      decision.look, decision.sp, decision.rb, decision.lm, decision.lj,
+      decision.look, decision.sp, decision.rb, decision.lm, decision.lj, decision.sr,
     );
     console.log('D|' + JSON.stringify(logLine));
     const action = {

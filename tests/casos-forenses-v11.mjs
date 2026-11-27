@@ -472,4 +472,105 @@ test('init rápido en mapas grandes (~800 casillas): sin esto, timeout real cont
   assert.ok(initMs < 200, `init tardó ${initMs.toFixed(1)} ms en un mapa de ~${(width - 2) * (height - 2)} casillas -- antes del umbral bajado a 250, esto tardaba 35-47 ms local (y timeouteó en meow.tel)`);
 });
 
-console.log('OK: los 28 casos forenses v11 pasaron.');
+// ------------------------------------------------------------- sprint por radio
+// Pared en forma de L: (1,1)->(2,1) 1 casilla al E y recién ahí dobla al S
+// -- el camino más corto a (2,4) gira en el segundo paso, a propósito.
+function bendHouse() {
+  const width = 6;
+  const height = 6;
+  const rows = Array.from({ length: height }, () => Array(width).fill('#'));
+  rows[1][1] = '.'; rows[1][2] = '.'; rows[2][2] = '.'; rows[3][2] = '.'; rows[4][2] = '.';
+  rows[0][1] = 'H';
+  return { width, height, rows: rows.map((row) => row.join('')), holes: [{ x: 1, y: 0, entrance: { x: 1, y: 1 } }] };
+}
+
+test('a) sprint por radio: con queso, d=4 en línea recta, estamina llena -> sprint', () => {
+  const { act, sink } = loadAct('cat', openHouse());
+  const action = act(observation('cat', {
+    turn: 1, you: { x: 2, y: 1, stamina: 30 }, mouse: { x: 6, y: 1, carrying: true }, cheese: [[8, 8]],
+  }));
+  const d = lastLog(sink);
+  assert.equal(d.md, 'PERSEGUIR');
+  assert.equal(action.move, 'E');
+  assert.equal(action.sprint, true);
+  assert.equal(d.sr, 1);
+});
+
+test('b) sprint por radio: igual pero sin queso -> sin sprint por radio', () => {
+  const { act, sink } = loadAct('cat', openHouse());
+  const action = act(observation('cat', {
+    turn: 1, you: { x: 2, y: 1, stamina: 30 }, mouse: { x: 6, y: 1, carrying: false }, cheese: [[8, 8]],
+  }));
+  assert.notEqual(action.sprint, true);
+  assert.equal(lastLog(sink).sr, 0);
+});
+
+test('c) sprint por radio: con queso pero estamina bajo la reserva -> sin sprint', () => {
+  const { act, sink } = loadAct('cat', openHouse());
+  const action = act(observation('cat', {
+    turn: 1, you: { x: 2, y: 1, stamina: 3 }, mouse: { x: 6, y: 1, carrying: true }, cheese: [[8, 8]],
+  }));
+  assert.notEqual(action.sprint, true, 'con sprintCost default (2), la reserva pide >=4 de estamina');
+  assert.equal(lastLog(sink).sr, 0);
+});
+
+test('d) sprint por radio: con queso pero el camino gira en el primer paso -> sin sprint', () => {
+  const { act, sink } = loadAct('cat', bendHouse());
+  const action = act(observation('cat', {
+    turn: 1, you: { x: 1, y: 1, stamina: 30 }, mouse: { x: 2, y: 4, carrying: true },
+  }));
+  const d = lastLog(sink);
+  assert.equal(d.d, 4, 'la distancia por camino debería seguir siendo 4 (1 E + 3 S)');
+  assert.notEqual(action.sprint, true, 'el camino dobla en el segundo paso (E, S), no es línea recta');
+  assert.equal(d.sr, 0);
+});
+
+test('e) sprint por radio: a 1-2 alineado, sprintRemate sigue igual', () => {
+  const { act: act1 } = loadAct('cat', openHouse());
+  const a1 = act1(observation('cat', {
+    turn: 1, you: { x: 5, y: 5, stamina: 30 }, mouse: { x: 6, y: 5, carrying: false }, visible: [[6, 5]],
+  }));
+  assert.equal(a1.move, 'E');
+  assert.equal(a1.sprint, true);
+
+  const { act: act2 } = loadAct('cat', openHouse());
+  const a2 = act2(observation('cat', {
+    turn: 1, you: { x: 5, y: 5, stamina: 30 }, mouse: { x: 7, y: 5, carrying: true }, visible: [[7, 5]],
+  }));
+  assert.equal(a2.move, 'E');
+  assert.equal(a2.sprint, true);
+});
+
+test('f) sprint por radio: a 5 casillas -> fuera de la correa, sin sprint por radio', () => {
+  const { act, sink } = loadAct('cat', openHouse());
+  const action = act(observation('cat', {
+    turn: 1, you: { x: 2, y: 1, stamina: 30 }, mouse: { x: 7, y: 1, carrying: true }, cheese: [[5, 5], [9, 9]],
+  }));
+  const d = lastLog(sink);
+  assert.notEqual(d.md, 'PERSEGUIR');
+  assert.equal(d.lj, 1);
+  assert.equal(d.sr, 0);
+});
+
+test('g1) sprint por radio: sprintCost default y estamina >= 2*sprintCost -> sprint', () => {
+  const { act, sink } = loadAct('cat', openHouse());
+  const action = act(observation('cat', {
+    turn: 1, you: { x: 2, y: 1, stamina: 4 }, mouse: { x: 6, y: 1, carrying: true },
+  }));
+  assert.equal(action.sprint, true);
+  assert.equal(lastLog(sink).sr, 1);
+});
+
+test('g2) sprint por radio: sprintCost aprendido tal que 2*sprintCost > maxStamina -> sin sprint', () => {
+  const { act, sink } = loadAct('cat', openHouse());
+  // Turno 1: sprintRemate a d=1 (sprint=true, estamina 30).
+  act(observation('cat', { turn: 1, you: { x: 2, y: 1, stamina: 30 }, mouse: { x: 3, y: 1, carrying: false } }));
+  // Turno 2: cae a 10 tras ese sprint -> sprintCost aprende ~20.
+  act(observation('cat', { turn: 2, you: { x: 3, y: 1, stamina: 10 }, mouse: { x: 7, y: 1, carrying: true } }));
+  // Turno 3: estamina llena otra vez (30) -- 2*sprintCost(~20)=40 > maxStamina(30): estructuralmente imposible.
+  const action = act(observation('cat', { turn: 3, you: { x: 3, y: 1, stamina: 30 }, mouse: { x: 7, y: 1, carrying: true } }));
+  assert.notEqual(action.sprint, true, 'con sprintCost ya aprendido alto, 2*sprintCost no entra en ninguna estamina posible');
+  assert.equal(lastLog(sink).sr, 0);
+});
+
+console.log('OK: los 36 casos forenses v11 pasaron.');
