@@ -498,6 +498,7 @@ function createBot(setup) {
   const PERSEGUIR_MAX_DIST = 4; // correa de PERSEGUIR: más lejos que esto (o sin camino), perseguir a un ratón visible pero inalcanzable deja la zona de los quesos sin cubrir por nada (valor inicial, provisional)
   const SPRINT_RADIO_MAX_DIST = 4; // sprint por radio con el ratón cargado: no tiene sentido pedirlo a un ratón al que ya no se persigue, así que no puede superar PERSEGUIR_MAX_DIST (valor inicial, provisional)
   const PREDICT_STEPS = 3; // intercepción predictiva en PERSEGUIR: hasta cuántas casillas adelante, siguiendo el rumbo, mientras el pasillo no tenga bifurcaciones (valor inicial, provisional)
+  const CENTINELA_MAX_TURNOS = 8; // turnos consecutivos en CENTINELA sin señal real del ratón antes de forzar una patrulla (valor inicial, provisional)
 
   // RATÓN (v7, restaurado -- ver analysis/salida/v7_vs_v6.txt y DISENO_V5.md).
   const MEMORIA_GATO = 10; // turnos sin ver al gato que siguen contando como si lo viera (DISENO_V5.md §2)
@@ -550,6 +551,8 @@ function createBot(setup) {
     lookCycle: 0, // turnos consecutivos sin ver al ratón (se resetea al volver a verlo)
     centro: null, // { firma, key } -- centro cacheado de CENTINELA, por conjunto de quesos
     centinelaGiroIdx: 0, // paso del giro 360 de CENTINELA sin señales
+    centinelaTurnos: 0, // turnos consecutivos en CENTINELA sin ninguna señal real del ratón
+    centinelaBreakHasta: 0, // turno hasta el que CENTINELA queda deshabilitado (patrulla forzada)
     lastMode: null,
     modeHistory: [],
     patrolTarget: -1,
@@ -1179,9 +1182,30 @@ function createBot(setup) {
       // arriba siempre deja target en algo (el máximo de creencia, aunque
       // no supere su propio umbral), así que target < 0 casi nunca se
       // cumple acá -- target sí se pisa después, con el centro.
+      // Límite de CENTINELA: 8 turnos seguidos sin ninguna señal real del
+      // ratón (ni visto, ni INTERCEPTAR, ni OLOR -- eso es justo lo que
+      // deja mode en 'PATRULLA' hasta acá) y se fuerza una patrulla de
+      // PATROL_HOLD_TURNS turnos hacia otro punto (entradas de agujero o
+      // quesos, bloque de abajo) en vez de quedarse siempre en el mismo
+      // centro, que en algunas casas cae en un rincón o pasillo ciego.
       if (mode === 'PATRULLA' && cheeseIds.length > 0) {
-        const centro = calcularCentro(cheeseIds, start);
-        if (centro >= 0) { target = centro; mode = 'CENTINELA'; }
+        if (obs.turn < memory.centinelaBreakHasta) {
+          // patrulla forzada en curso: target sigue en -1, lo elige el bloque de abajo
+        } else {
+          const centro = calcularCentro(cheeseIds, start);
+          if (centro >= 0) {
+            memory.centinelaTurnos++;
+            if (memory.centinelaTurnos > CENTINELA_MAX_TURNOS) {
+              memory.centinelaBreakHasta = obs.turn + PATROL_HOLD_TURNS;
+              memory.centinelaTurnos = 0;
+            } else {
+              target = centro;
+              mode = 'CENTINELA';
+            }
+          }
+        }
+      } else {
+        memory.centinelaTurnos = 0; // hubo señal real (PERSEGUIR/INTERCEPTAR/OLOR): no está atrapado
       }
       if (target < 0 || target === start && mode === 'PATRULLA') {
         const candidateTargets = [];

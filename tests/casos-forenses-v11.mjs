@@ -451,6 +451,44 @@ test('f) sin ningún queso en el piso: PATRULLA, no CENTINELA', () => {
   assert.equal(lastLog(sink).md, 'PATRULLA');
 });
 
+test('g) CENTINELA: tras 8 turnos seguidos sin señal, el 9no turno rompe a patrulla', () => {
+  const { act, sink } = loadAct('cat', openHouse());
+  for (let t = 1; t <= 8; t++) {
+    act(observation('cat', { turn: t, you: { x: 6, y: 6 }, cheese: [[2, 2], [10, 10]] }));
+    assert.equal(lastLog(sink).md, 'CENTINELA', `turno ${t}: todavía debería estar en CENTINELA`);
+  }
+  act(observation('cat', { turn: 9, you: { x: 6, y: 6 }, cheese: [[2, 2], [10, 10]] }));
+  assert.notEqual(lastLog(sink).md, 'CENTINELA', 'tras 8 turnos seguidos, el 9no debería romper a patrulla');
+});
+
+test('h) CENTINELA: una señal real (PERSEGUIR) resetea el contador', () => {
+  const { act, sink } = loadAct('cat', openHouse());
+  for (let t = 1; t <= 4; t++) {
+    act(observation('cat', { turn: t, you: { x: 6, y: 6 }, cheese: [[2, 2], [10, 10]] }));
+  }
+  act(observation('cat', { turn: 5, you: { x: 6, y: 6 }, mouse: { x: 7, y: 6, carrying: false }, cheese: [[2, 2], [10, 10]] }));
+  assert.equal(lastLog(sink).md, 'PERSEGUIR');
+  // Tras perder al ratón, OLOR lo cubre unos turnos mientras decae la
+  // creencia (también cuenta como señal real: resetea el contador cada
+  // vez) -- se deja correr hasta que vuelva a CENTINELA por su cuenta.
+  let t = 6;
+  let md;
+  do {
+    act(observation('cat', { turn: t, you: { x: 6, y: 6 }, cheese: [[2, 2], [10, 10]] }));
+    md = lastLog(sink).md;
+    t++;
+  } while (md !== 'CENTINELA' && t < 60);
+  assert.equal(md, 'CENTINELA', 'debería volver a CENTINELA una vez que decae la creencia de OLOR');
+  // Desde que vuelve a CENTINELA, debería aguantar los 8 turnos completos
+  // (no solo los 4 que le faltaban antes de la señal del turno 5).
+  for (let i = 1; i <= 7; i++, t++) {
+    act(observation('cat', { turn: t, you: { x: 6, y: 6 }, cheese: [[2, 2], [10, 10]] }));
+    assert.equal(lastLog(sink).md, 'CENTINELA', `turno ${t}: todavía deberían faltar turnos para completar los 8 desde el reseteo`);
+  }
+  act(observation('cat', { turn: t, you: { x: 6, y: 6 }, cheese: [[2, 2], [10, 10]] }));
+  assert.notEqual(lastLog(sink).md, 'CENTINELA', 'tras 8 turnos seguidos desde el reseteo, debería romper a patrulla');
+});
+
 test('init rápido en mapas grandes (~800 casillas): sin esto, timeout real contra Imanol', () => {
   const width = 31;
   const height = 29;
@@ -675,4 +713,4 @@ test('f) intercepción predictiva: con varios quesos en el piso no cambia nada',
   assert.notEqual(action.move, 'STAY');
 });
 
-console.log('OK: los 43 casos forenses v11 pasaron.');
+console.log('OK: los 45 casos forenses v11 pasaron.');
