@@ -645,7 +645,13 @@ function createBot(setup) {
       if (memory.lastStamina !== null && obs.turn === memory.lastStaminaTurn + 1) {
         const delta = currentStamina - memory.lastStamina;
         if (memory.lastSprint && delta < 0) {
-          params.sprintCost = Math.max(0.5, Math.max(params.sprintCost * 0.7, -delta));
+          // Promedio móvil de verdad (igual que staminaRegen, dos líneas
+          // más abajo), no el Math.max de antes: ese solo podía subir --
+          // si una lectura ruidosa inflaba sprintCost, una lectura real
+          // más baja después quedaba ignorada por completo (el máximo
+          // siempre ganaba la decadencia del 70%), y hasSprintStamina
+          // fallaba seguido con estamina real de sobra.
+          params.sprintCost = Math.max(0.5, params.sprintCost * 0.7 + (-delta) * 0.3);
         } else if (delta > 0 && delta < 4) {
           params.staminaRegen = params.staminaRegen * 0.7 + delta * 0.3;
         }
@@ -1128,9 +1134,9 @@ function createBot(setup) {
       // sin ninguna chance real de alcanzarlo -- ver DISENO (correa).
       const catToMouseDist = mouseId >= 0 ? distanceId('cat', start, mouseId) : Infinity;
       const lj = toBit(mouseId >= 0 && catToMouseDist > PERSEGUIR_MAX_DIST);
+      let pi = 0;
       let target = -1;
       let mode = 'PATRULLA';
-      let pi = 0;
       if (mouseId >= 0 && catToMouseDist <= PERSEGUIR_MAX_DIST) {
         const predicted = predictInterceptTarget(mouseId, memory.lastMouseSeen ? memory.lastMouseSeen.heading : null);
         const predictedOk = predicted !== mouseId && Number.isFinite(distanceId('cat', start, predicted));

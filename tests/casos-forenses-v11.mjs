@@ -561,16 +561,40 @@ test('g1) sprint por radio: sprintCost default y estamina >= 2*sprintCost -> spr
   assert.equal(lastLog(sink).sr, 1);
 });
 
-test('g2) sprint por radio: sprintCost aprendido tal que 2*sprintCost > maxStamina -> sin sprint', () => {
+test('g2) sprint por radio: sprintCost aprendido alto de forma consistente -> sin sprint', () => {
   const { act, sink } = loadAct('cat', openHouse());
-  // Turno 1: sprintRemate a d=1 (sprint=true, estamina 30).
-  act(observation('cat', { turn: 1, you: { x: 2, y: 1, stamina: 30 }, mouse: { x: 3, y: 1, carrying: false } }));
-  // Turno 2: cae a 10 tras ese sprint -> sprintCost aprende ~20.
-  act(observation('cat', { turn: 2, you: { x: 3, y: 1, stamina: 10 }, mouse: { x: 7, y: 1, carrying: true } }));
-  // Turno 3: estamina llena otra vez (30) -- 2*sprintCost(~20)=40 > maxStamina(30): estructuralmente imposible.
-  const action = act(observation('cat', { turn: 3, you: { x: 3, y: 1, stamina: 30 }, mouse: { x: 7, y: 1, carrying: true } }));
-  assert.notEqual(action.sprint, true, 'con sprintCost ya aprendido alto, 2*sprintCost no entra en ninguna estamina posible');
+  // Con el promedio móvil (ya no el Math.max de antes), una sola lectura
+  // ruidosa no alcanza para inflar sprintCost -- hace falta una casa donde
+  // el sprint sea caro DE VERDAD, de forma consistente en varios sprints.
+  let turn = 1;
+  for (let i = 0; i < 6; i++) {
+    act(observation('cat', { turn: turn++, you: { x: 2, y: 1, stamina: 30 }, mouse: { x: 3, y: 1, carrying: false } }));
+    act(observation('cat', { turn: turn++, you: { x: 3, y: 1, stamina: 10 } }));
+  }
+  const action = act(observation('cat', {
+    turn: turn++, you: { x: 3, y: 1, stamina: 30 }, mouse: { x: 7, y: 1, carrying: true },
+  }));
+  assert.notEqual(action.sprint, true, 'con sprintCost aprendido alto de forma consistente, 2*sprintCost no entra en la estamina real');
   assert.equal(lastLog(sink).sr, 0);
+});
+
+test('g3) sprintCost: una lectura ruidosa ya no queda pegada (se corrige con una lectura real después)', () => {
+  const { act: actOld } = loadAct('cat', openHouse());
+  const { act: actNew } = loadAct('cat', openHouse());
+  // Una sola lectura alta (ruido), y después varias lecturas reales bajas.
+  for (const act of [actOld, actNew]) {
+    act(observation('cat', { turn: 1, you: { x: 2, y: 1, stamina: 30 }, mouse: { x: 3, y: 1, carrying: false } }));
+    act(observation('cat', { turn: 2, you: { x: 3, y: 1, stamina: 10 } })); // -20 de golpe, una vez
+  }
+  // 5 sprints reales más, con costo chico de verdad (-2 cada uno).
+  let turn = 3;
+  let lastAction;
+  for (let i = 0; i < 5; i++) {
+    actNew(observation('cat', { turn: turn, you: { x: 2, y: 1, stamina: 30 }, mouse: { x: 3, y: 1, carrying: false } }));
+    lastAction = actNew(observation('cat', { turn: turn + 1, you: { x: 2, y: 1, stamina: 28 }, mouse: { x: 4, y: 1, carrying: true }, visible: [[4, 1]] }));
+    turn += 2;
+  }
+  assert.equal(lastAction.sprint, true, 'con varias lecturas reales bajas después de una ruidosa, el sprint a d=2 debería volver a dispararse');
 });
 
 // ----------------------------------------------------- intercepción predictiva
@@ -651,4 +675,4 @@ test('f) intercepción predictiva: con varios quesos en el piso no cambia nada',
   assert.notEqual(action.move, 'STAY');
 });
 
-console.log('OK: los 42 casos forenses v11 pasaron.');
+console.log('OK: los 43 casos forenses v11 pasaron.');
